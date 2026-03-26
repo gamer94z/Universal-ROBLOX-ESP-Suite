@@ -2,6 +2,8 @@
 
 A compact Roblox ESP script with a custom in-game UI, team-based coloring, tracers, box modes, visibility checks, and a polished startup flow.
 
+Current release: `v1.0.0`
+
 ## Overview
 
 This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It includes a tabbed control panel, animated splash intro, keybinds, preset modes, and multiple visual ESP styles while keeping the layout practical and easy to use.
@@ -16,6 +18,9 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 - Skeleton ESP
 - Focus target highlighting for the closest visible enemy
 - Compact mode
+- Mini live HUD
+- Performance stats panel
+- Performance optimization tab
 - Startup intro animation
 - Toast notifications for setting changes
 - Settings persistence through `esp_settings.json`
@@ -34,6 +39,8 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 - ESP enable / disable
 - Preset cycling
 - Team check status
+- Quick hide key display
+- Mini HUD toggle
 - Compact mode
 - Settings status
 
@@ -51,6 +58,14 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 - Tracers
 - Max distance
 
+### Perf
+
+- Boost mode
+- Low materials
+- Hide textures
+- Hide effects
+- Disable shadows
+
 ## Files
 
 - [`esp.lua`](./esp.lua): Main script
@@ -62,6 +77,7 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 - This repo currently stores the ESP in a single Lua file for simplicity.
 - Local saved settings are written to `esp_settings.json` when supported by the executor environment.
 - If a drawing type is unsupported, the script falls back safely where possible.
+- Performance tweaks are applied locally and are intended as client-side visual optimizations.
 
 ## Setup
 

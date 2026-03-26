@@ -4,6 +4,7 @@ local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
 local LOCAL_PLAYER = Players.LocalPlayer
 
 local CONFIG = {
@@ -19,6 +20,11 @@ local CONFIG = {
 	boxMode = "Highlight",
 	compactMode = false,
 	showMiniHud = true,
+	performanceMode = false,
+	simplifyMaterials = false,
+	hideTextures = false,
+	hideEffects = false,
+	disableShadows = false,
 	fallbackEspColor = Color3.fromRGB(255, 2, 127),
 	visibleColor = Color3.fromRGB(117, 255, 160),
 	hiddenColor = Color3.fromRGB(255, 116, 116),
@@ -27,7 +33,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "0.0.1",
+	version = "1.0.0",
 	uiToggleKey = Enum.KeyCode.RightShift,
 	quickHideKey = Enum.KeyCode.K,
 	espToggleKey = Enum.KeyCode.F4,
@@ -149,6 +155,7 @@ local PRESETS
 local currentPresetIndex = 2
 local SETTING_KEYS
 local toastLayer
+local syncUiFromConfig
 
 local function canUseFileApi()
 	return type(isfile) == "function" and type(readfile) == "function" and type(writefile) == "function"
@@ -526,6 +533,11 @@ SETTING_KEYS = {
 	"boxMode",
 	"compactMode",
 	"showMiniHud",
+	"performanceMode",
+	"simplifyMaterials",
+	"hideTextures",
+	"hideEffects",
+	"disableShadows",
 	"maxDistance",
 }
 
@@ -722,6 +734,7 @@ local pages = {
 	control = createPage(),
 	display = createPage(),
 	combat = createPage(),
+	performance = createPage(),
 }
 
 local tabButtons = {}
@@ -943,6 +956,10 @@ local combatHeaderRow, combatHeaderValue = createStatusRow(pages.combat, "COMBAT
 combatHeaderRow.BackgroundColor3 = THEME.panelAlt
 combatHeaderValue.TextColor3 = THEME.accent
 
+local performanceHeaderRow, performanceHeaderValue = createStatusRow(pages.performance, "PERFORMANCE", "LOCAL")
+performanceHeaderRow.BackgroundColor3 = THEME.panelAlt
+performanceHeaderValue.TextColor3 = THEME.accent
+
 local espColorStatusRow, espColorStatusValue = createStatusRow(pages.display, "ESP COLOR", "AUTO TEAM")
 
 local enabledRow, enabledToggle = createToggleRow(pages.control, "ESP ENABLED", CONFIG.enabled)
@@ -969,9 +986,21 @@ local maxDistanceLabel = makeLabel(maxDistanceRow, "MAX DISTANCE", 11, THEME.mut
 maxDistanceLabel.Position = UDim2.new(0, 10, 0, 0)
 maxDistanceLabel.Size = UDim2.new(0, 110, 1, 0)
 
+local performanceModeRow, performanceModeToggle = createToggleRow(pages.performance, "BOOST MODE", CONFIG.performanceMode)
+local simplifyMaterialsRow, simplifyMaterialsToggle = createToggleRow(pages.performance, "LOW MATERIALS", CONFIG.simplifyMaterials)
+local hideTexturesRow, hideTexturesToggle = createToggleRow(pages.performance, "HIDE TEXTURES", CONFIG.hideTextures)
+local hideEffectsRow, hideEffectsToggle = createToggleRow(pages.performance, "HIDE EFFECTS", CONFIG.hideEffects)
+local disableShadowsRow, disableShadowsToggle = createToggleRow(pages.performance, "DISABLE SHADOWS", CONFIG.disableShadows)
+
 local espObjects = {}
 local drawingSupported = DRAWING_SUPPORT.line
 local focusedPlayer = nil
+local performanceCache = {
+	parts = {},
+	textures = {},
+	effects = {},
+	lighting = nil,
+}
 
 local function isSameTeam(player)
 	if not LOCAL_PLAYER then
@@ -1075,6 +1104,122 @@ local function getTracerOrigin(camera)
 	end
 
 	return nil
+end
+
+local function cacheLighting()
+	if not performanceCache.lighting then
+		performanceCache.lighting = {
+			GlobalShadows = Lighting.GlobalShadows,
+			FogEnd = Lighting.FogEnd,
+			Brightness = Lighting.Brightness,
+		}
+	end
+end
+
+local function restorePartAppearance(part)
+	local cached = performanceCache.parts[part]
+	if cached and part.Parent then
+		part.Material = cached.Material
+		part.Reflectance = cached.Reflectance
+	end
+	performanceCache.parts[part] = nil
+end
+
+local function restoreTextureAppearance(item)
+	local cached = performanceCache.textures[item]
+	if cached and item.Parent then
+		item.Transparency = cached.Transparency
+	end
+	performanceCache.textures[item] = nil
+end
+
+local function restoreEffectAppearance(item)
+	local cached = performanceCache.effects[item]
+	if cached and item.Parent and (item:IsA("ParticleEmitter") or item:IsA("Trail") or item:IsA("Beam") or item:IsA("Smoke") or item:IsA("Fire") or item:IsA("Sparkles")) then
+		item.Enabled = cached.Enabled
+	end
+	performanceCache.effects[item] = nil
+end
+
+local function applyPerformanceSettings()
+	if CONFIG.performanceMode then
+		CONFIG.simplifyMaterials = true
+		CONFIG.hideTextures = true
+		CONFIG.hideEffects = true
+		CONFIG.disableShadows = true
+	end
+
+	cacheLighting()
+
+	for _, descendant in ipairs(workspace:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			if CONFIG.simplifyMaterials then
+				if not performanceCache.parts[descendant] then
+					performanceCache.parts[descendant] = {
+						Material = descendant.Material,
+						Reflectance = descendant.Reflectance,
+					}
+				end
+				descendant.Material = Enum.Material.SmoothPlastic
+				descendant.Reflectance = 0
+			else
+				restorePartAppearance(descendant)
+			end
+		elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+			if CONFIG.hideTextures then
+				if not performanceCache.textures[descendant] then
+					performanceCache.textures[descendant] = {
+						Transparency = descendant.Transparency,
+					}
+				end
+				descendant.Transparency = 1
+			else
+				restoreTextureAppearance(descendant)
+			end
+		elseif descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") or descendant:IsA("Smoke") or descendant:IsA("Fire") or descendant:IsA("Sparkles") then
+			if CONFIG.hideEffects then
+				if not performanceCache.effects[descendant] then
+					performanceCache.effects[descendant] = {
+						Enabled = descendant.Enabled,
+					}
+				end
+				descendant.Enabled = false
+			end
+		end
+	end
+
+	for item in pairs(performanceCache.parts) do
+		if not item.Parent or not CONFIG.simplifyMaterials then
+			restorePartAppearance(item)
+		end
+	end
+
+	for item in pairs(performanceCache.textures) do
+		if not item.Parent or not CONFIG.hideTextures then
+			restoreTextureAppearance(item)
+		end
+	end
+
+	for item, cached in pairs(performanceCache.effects) do
+		if not item.Parent then
+			performanceCache.effects[item] = nil
+		elseif not CONFIG.hideEffects then
+			item.Enabled = cached.Enabled
+			performanceCache.effects[item] = nil
+		end
+	end
+
+	if performanceCache.lighting then
+		if CONFIG.disableShadows then
+			Lighting.GlobalShadows = false
+			Lighting.FogEnd = 100000
+			Lighting.Brightness = math.max(Lighting.Brightness, 2)
+		else
+			Lighting.GlobalShadows = performanceCache.lighting.GlobalShadows
+			Lighting.FogEnd = performanceCache.lighting.FogEnd
+			Lighting.Brightness = performanceCache.lighting.Brightness
+		end
+	end
 end
 
 local function getEspEntry(player)
@@ -1701,6 +1846,21 @@ end
 local function bindToggle(button, configKey)
 	button.MouseButton1Click:Connect(function()
 		CONFIG[configKey] = not CONFIG[configKey]
+		if configKey == "performanceMode" and not CONFIG[configKey] then
+			CONFIG.simplifyMaterials = false
+			CONFIG.hideTextures = false
+			CONFIG.hideEffects = false
+			CONFIG.disableShadows = false
+		end
+		if configKey == "performanceMode" or configKey == "simplifyMaterials" or configKey == "hideTextures" or configKey == "hideEffects" or configKey == "disableShadows" then
+			if configKey ~= "performanceMode" and not CONFIG[configKey] then
+				CONFIG.performanceMode = false
+			end
+			applyPerformanceSettings()
+			if syncUiFromConfig then
+				syncUiFromConfig()
+			end
+		end
 		setToggleState(button, CONFIG[configKey])
 		if configKey == "showMiniHud" then
 			miniHud.Visible = CONFIG.showMiniHud and window.Visible
@@ -1810,6 +1970,7 @@ local function playIntroAnimation()
 	window.Visible = true
 	miniHud.Visible = CONFIG.showMiniHud
 	syncUiFromConfig()
+	applyPerformanceSettings()
 	applyCompactMode(CONFIG.compactMode)
 	setActiveTab("control")
 	setMinimized(false)
@@ -1828,6 +1989,10 @@ createTabButton("combat", "COMBAT").MouseButton1Click:Connect(function()
 	setActiveTab("combat")
 end)
 
+createTabButton("performance", "PERF").MouseButton1Click:Connect(function()
+	setActiveTab("performance")
+end)
+
 bindToggle(enabledToggle, "enabled")
 bindToggle(namesToggle, "showNames")
 bindToggle(distanceToggle, "showDistance")
@@ -1838,6 +2003,11 @@ bindToggle(focusTargetToggle, "showFocusTarget")
 bindToggle(visibilityToggle, "visibilityCheck")
 bindToggle(tracersToggle, "showTracers")
 bindToggle(miniHudToggle, "showMiniHud")
+bindToggle(performanceModeToggle, "performanceMode")
+bindToggle(simplifyMaterialsToggle, "simplifyMaterials")
+bindToggle(hideTexturesToggle, "hideTextures")
+bindToggle(hideEffectsToggle, "hideEffects")
+bindToggle(disableShadowsToggle, "disableShadows")
 
 compactToggle.MouseButton1Click:Connect(function()
 	applyCompactMode(not CONFIG.compactMode)
@@ -1846,7 +2016,7 @@ compactToggle.MouseButton1Click:Connect(function()
 	showToast("Setting Updated", string.format("%s %s", "Compact Mode", CONFIG.compactMode and "enabled" or "disabled"), CONFIG.compactMode and THEME.accent or THEME.muted)
 end)
 
-local function syncUiFromConfig()
+syncUiFromConfig = function()
 	setToggleState(enabledToggle, CONFIG.enabled)
 	setToggleState(namesToggle, CONFIG.showNames)
 	setToggleState(distanceToggle, CONFIG.showDistance)
@@ -1857,6 +2027,11 @@ local function syncUiFromConfig()
 	setToggleState(visibilityToggle, CONFIG.visibilityCheck)
 	setToggleState(tracersToggle, CONFIG.showTracers)
 	setToggleState(miniHudToggle, CONFIG.showMiniHud)
+	setToggleState(performanceModeToggle, CONFIG.performanceMode)
+	setToggleState(simplifyMaterialsToggle, CONFIG.simplifyMaterials)
+	setToggleState(hideTexturesToggle, CONFIG.hideTextures)
+	setToggleState(hideEffectsToggle, CONFIG.hideEffects)
+	setToggleState(disableShadowsToggle, CONFIG.disableShadows)
 	setToggleState(compactToggle, CONFIG.compactMode)
 	boxModeButton.Text = getEffectiveBoxMode()
 	presetButton.Text = PRESETS[currentPresetIndex].name
