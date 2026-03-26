@@ -450,7 +450,7 @@ window.Visible = false
 
 local expandedWindowSize = UDim2.new(0, 392, 0, 462)
 local minimizedWindowSize = UDim2.new(0, 392, 0, 96)
-local compactWindowSize = UDim2.new(0, 340, 0, 394)
+local compactWindowSize = UDim2.new(0, 340, 0, 428)
 local compactMinimizedWindowSize = UDim2.new(0, 340, 0, 86)
 local uiMinimized = false
 local updateInterval = 1 / 30
