@@ -18,6 +18,7 @@ local CONFIG = {
 	showTracers = true,
 	boxMode = "Highlight",
 	compactMode = false,
+	showMiniHud = true,
 	fallbackEspColor = Color3.fromRGB(255, 2, 127),
 	visibleColor = Color3.fromRGB(117, 255, 160),
 	hiddenColor = Color3.fromRGB(255, 116, 116),
@@ -106,6 +107,14 @@ local function formatSettingName(key)
 		table.insert(words, withSpaces:sub(1, 1):upper() .. withSpaces:sub(2))
 	end
 	return table.concat(words, " ")
+end
+
+local function truncateText(text, maxLength)
+	if #text <= maxLength then
+		return text
+	end
+
+	return text:sub(1, math.max(1, maxLength - 3)) .. "..."
 end
 
 local function createDrawing(kind)
@@ -260,6 +269,8 @@ local DRAWING_SUPPORT = {
 	square = supportsDrawing("Square"),
 }
 
+local miniHudLabels = {}
+
 local gui = create("ScreenGui", {
 	Name = "ESPGUI",
 	IgnoreGuiInset = true,
@@ -267,6 +278,81 @@ local gui = create("ScreenGui", {
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	Parent = CoreGui,
 })
+
+local miniHud = create("Frame", {
+	AnchorPoint = Vector2.new(1, 0),
+	BackgroundColor3 = Color3.fromRGB(18, 22, 32),
+	BorderSizePixel = 0,
+	Position = UDim2.new(1, -16, 0, 16),
+	Size = UDim2.new(0, 196, 0, 118),
+	ZIndex = 12,
+	Parent = gui,
+})
+addCorner(miniHud, 10)
+addStroke(miniHud, THEME.border, 0.25, 1)
+
+create("UIGradient", {
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 27, 38)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 18, 26)),
+	}),
+	Rotation = 90,
+	Parent = miniHud,
+})
+
+local miniHudTitle = makeLabel(miniHud, "0xVyrs Live", 11, THEME.text, Enum.Font.GothamBold)
+miniHudTitle.Position = UDim2.new(0, 10, 0, 8)
+miniHudTitle.Size = UDim2.new(1, -20, 0, 14)
+miniHudTitle.ZIndex = 13
+
+local miniHudSub = makeLabel(miniHud, "Combat Snapshot", 9, THEME.muted, Enum.Font.GothamMedium)
+miniHudSub.Position = UDim2.new(0, 10, 0, 22)
+miniHudSub.Size = UDim2.new(1, -20, 0, 12)
+miniHudSub.ZIndex = 13
+
+local miniHudBody = create("Frame", {
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 10, 0, 42),
+	Size = UDim2.new(1, -20, 0, 64),
+	ZIndex = 13,
+	Parent = miniHud,
+})
+
+create("UIListLayout", {
+	Padding = UDim.new(0, 4),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+	Parent = miniHudBody,
+})
+
+local function createMiniHudRow(title)
+	local row = create("Frame", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Size = UDim2.new(1, 0, 0, 15),
+		ZIndex = 13,
+		Parent = miniHudBody,
+	})
+
+	local left = makeLabel(row, title, 9, THEME.muted, Enum.Font.GothamBold)
+	left.Size = UDim2.new(0.39, 0, 1, 0)
+	left.ZIndex = 13
+
+	local right = makeLabel(row, "--", 8, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+	right.AnchorPoint = Vector2.new(1, 0)
+	right.Position = UDim2.new(1, 0, 0, 0)
+	right.Size = UDim2.new(0.61, 0, 1, 0)
+	right.ZIndex = 13
+
+	return right
+end
+
+miniHudLabels.status = createMiniHudRow("STATUS")
+miniHudLabels.fps = createMiniHudRow("FPS")
+miniHudLabels.targets = createMiniHudRow("TARGETS")
+miniHudLabels.focus = createMiniHudRow("FOCUS")
+miniHud.Visible = CONFIG.showMiniHud
 
 toastLayer = create("Frame", {
 	AnchorPoint = Vector2.new(1, 1),
@@ -361,6 +447,9 @@ local compactWindowSize = UDim2.new(0, 340, 0, 394)
 local compactMinimizedWindowSize = UDim2.new(0, 340, 0, 86)
 local uiMinimized = false
 local updateInterval = 1 / 30
+local currentFps = 0
+local trackedEnemyCount = 0
+local lastRefreshMs = 0
 
 PRESETS = {
 	{
@@ -436,6 +525,7 @@ SETTING_KEYS = {
 	"showTracers",
 	"boxMode",
 	"compactMode",
+	"showMiniHud",
 	"maxDistance",
 }
 
@@ -662,6 +752,55 @@ local function createStatusRow(parent, labelText, valueText)
 	return row, value
 end
 
+local function createPerfRow(parent)
+	local row = createRow(parent, 34)
+
+	local statHolder = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(1, -18, 1, -8),
+		Parent = row,
+	})
+
+	create("UIGridLayout", {
+		CellPadding = UDim2.new(0, 6, 0, 0),
+		CellSize = UDim2.new(0.25, -5, 1, 0),
+		FillDirectionMaxCells = 4,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = statHolder,
+	})
+
+	local stats = {}
+	for _, item in ipairs({
+		{ key = "fps", title = "FPS" },
+		{ key = "visible", title = "VISIBLE" },
+		{ key = "tracked", title = "TRACKED" },
+		{ key = "update", title = "UPDATE" },
+	}) do
+		local cell = create("Frame", {
+			BackgroundColor3 = THEME.panelAlt,
+			BorderSizePixel = 0,
+			Parent = statHolder,
+		})
+		addCorner(cell, 6)
+
+		local title = makeLabel(cell, item.title, 8, THEME.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+		title.Position = UDim2.new(0, 0, 0, 2)
+		title.Size = UDim2.new(1, 0, 0, 10)
+
+		local value = makeLabel(cell, "--", 10, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+		value.Position = UDim2.new(0, 0, 0, 12)
+		value.Size = UDim2.new(1, 0, 1, -12)
+
+		stats[item.key] = value
+	end
+
+	return row, stats
+end
+
 local function createCycleRow(parent, labelText, valueText)
 	local row = createRow(parent, 30)
 	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
@@ -794,6 +933,7 @@ addStroke(killButton, THEME.accent, 0.1, 1)
 local controlHeaderRow, controlHeaderValue = createStatusRow(pages.control, "CONTROL", "ACTIVE")
 controlHeaderRow.BackgroundColor3 = THEME.panelAlt
 controlHeaderValue.TextColor3 = THEME.accent
+local perfRow, perfStats = createPerfRow(pages.control)
 
 local displayHeaderRow, displayHeaderValue = createStatusRow(pages.display, "DISPLAY", "ACTIVE")
 displayHeaderRow.BackgroundColor3 = THEME.panelAlt
@@ -809,6 +949,7 @@ local enabledRow, enabledToggle = createToggleRow(pages.control, "ESP ENABLED", 
 local presetRow, presetButton = createCycleRow(pages.control, "PRESET", PRESETS[currentPresetIndex].name)
 local teamCheckStatusRow, teamCheckStatusValue = createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
 local quickHideRow, quickHideValue = createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
+local miniHudRow, miniHudToggle = createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud)
 local compactRow, compactToggle = createToggleRow(pages.control, "COMPACT MODE", CONFIG.compactMode)
 local saveStatusRow, saveStatusValue = createStatusRow(pages.control, "SETTINGS", canUseFileApi() and "AUTO SAVE" or "MEMORY")
 
@@ -1477,8 +1618,36 @@ local function updatePlayerEsp(player)
 	end
 end
 
+local function updatePerfStatsUi()
+	if not perfStats then
+		return
+	end
+
+	perfStats.fps.Text = tostring(math.max(0, math.floor(currentFps + 0.5)))
+	perfStats.visible.Text = tostring(visibleEnemyCount)
+	perfStats.tracked.Text = tostring(trackedEnemyCount)
+	perfStats.update.Text = string.format("%.1fms", lastRefreshMs)
+
+	if miniHudLabels.status then
+		miniHudLabels.status.Text = CONFIG.enabled and "ONLINE" or "OFFLINE"
+		miniHudLabels.status.TextColor3 = CONFIG.enabled and THEME.accent or THEME.muted
+		miniHudLabels.fps.Text = string.format("%d | %.1fms", math.max(0, math.floor(currentFps + 0.5)), lastRefreshMs)
+		miniHudLabels.fps.TextColor3 = THEME.text
+		miniHudLabels.targets.Text = string.format("%d visible / %d tracked", visibleEnemyCount, trackedEnemyCount)
+		if CONFIG.showFocusTarget and focusedPlayer then
+			miniHudLabels.focus.Text = truncateText(focusedPlayer.Name, 18)
+			miniHudLabels.focus.TextColor3 = THEME.focus
+		else
+			miniHudLabels.focus.Text = "None"
+			miniHudLabels.focus.TextColor3 = THEME.text
+		end
+	end
+end
+
 local function refreshAllEsp()
+	local refreshStart = os.clock()
 	visibleEnemyCount = 0
+	trackedEnemyCount = 0
 	focusedPlayer = nil
 	local focusedDistance = math.huge
 
@@ -1489,6 +1658,7 @@ local function refreshAllEsp()
 			local localCharacter = LOCAL_PLAYER.Character
 			local localRoot = localCharacter and getCharacterRoot(localCharacter)
 			if character and root and localRoot and isEnemyCandidate(player) then
+				trackedEnemyCount = trackedEnemyCount + 1
 				local distance = (root.Position - localRoot.Position).Magnitude
 				if distance <= CONFIG.maxDistance and isPlayerVisible(character, root) then
 					visibleEnemyCount = visibleEnemyCount + 1
@@ -1508,6 +1678,9 @@ local function refreshAllEsp()
 			end)
 		end
 	end
+
+	lastRefreshMs = (os.clock() - refreshStart) * 1000
+	updatePerfStatsUi()
 
 end
 
@@ -1529,6 +1702,9 @@ local function bindToggle(button, configKey)
 	button.MouseButton1Click:Connect(function()
 		CONFIG[configKey] = not CONFIG[configKey]
 		setToggleState(button, CONFIG[configKey])
+		if configKey == "showMiniHud" then
+			miniHud.Visible = CONFIG.showMiniHud and window.Visible
+		end
 		refreshAllEsp()
 		saveSettings()
 		showToast("Setting Updated", string.format("%s %s", formatSettingName(configKey), CONFIG[configKey] and "enabled" or "disabled"), CONFIG[configKey] and THEME.accent or THEME.muted)
@@ -1632,6 +1808,7 @@ local function playIntroAnimation()
 	activeTab = "control"
 	setActiveTab("control")
 	window.Visible = true
+	miniHud.Visible = CONFIG.showMiniHud
 	syncUiFromConfig()
 	applyCompactMode(CONFIG.compactMode)
 	setActiveTab("control")
@@ -1660,6 +1837,7 @@ bindToggle(skeletonToggle, "showSkeleton")
 bindToggle(focusTargetToggle, "showFocusTarget")
 bindToggle(visibilityToggle, "visibilityCheck")
 bindToggle(tracersToggle, "showTracers")
+bindToggle(miniHudToggle, "showMiniHud")
 
 compactToggle.MouseButton1Click:Connect(function()
 	applyCompactMode(not CONFIG.compactMode)
@@ -1678,10 +1856,12 @@ local function syncUiFromConfig()
 	setToggleState(focusTargetToggle, CONFIG.showFocusTarget)
 	setToggleState(visibilityToggle, CONFIG.visibilityCheck)
 	setToggleState(tracersToggle, CONFIG.showTracers)
+	setToggleState(miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(compactToggle, CONFIG.compactMode)
 	boxModeButton.Text = getEffectiveBoxMode()
 	presetButton.Text = PRESETS[currentPresetIndex].name
 	saveStatusValue.Text = canUseFileApi() and "AUTO SAVE" or "MEMORY"
+	miniHud.Visible = CONFIG.showMiniHud
 end
 
 presetButton.MouseButton1Click:Connect(function()
@@ -1736,6 +1916,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
 	if input.KeyCode == CONFIG.quickHideKey then
 		window.Visible = not window.Visible
+		miniHud.Visible = window.Visible and CONFIG.showMiniHud
 		showToast("Menu", window.Visible and "Menu shown" or "Menu hidden", window.Visible and THEME.accent or THEME.muted)
 	elseif input.KeyCode == CONFIG.uiToggleKey then
 		gui.Enabled = not gui.Enabled
@@ -1749,6 +1930,9 @@ end)
 
 local updateAccumulator = 0
 RunService.RenderStepped:Connect(function(deltaTime)
+	if deltaTime > 0 then
+		currentFps = (currentFps == 0) and (1 / deltaTime) or (currentFps * 0.85 + (1 / deltaTime) * 0.15)
+	end
 	updateAccumulator = updateAccumulator + deltaTime
 	if updateAccumulator >= updateInterval then
 		updateAccumulator = 0
