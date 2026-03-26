@@ -69,6 +69,12 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 2. Edit [`esp.lua`](./esp.lua) if you want to change defaults, theme values, or keybinds.
 3. Load the script in your Roblox environment.
 
+## Loadstring
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp.lua"))()
+```
+
 ## Status
 
 This project is currently focused on being a clean, practical ESP suite with a polished UI and straightforward configuration.
