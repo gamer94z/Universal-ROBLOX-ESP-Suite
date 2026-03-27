@@ -1,127 +1,189 @@
 # 0xVyrs Universal ROBLOX ESP Suite
 
-A single-file Roblox ESP with a polished in-game menu, saved settings, combat-focused overlays, and client-side view/performance tools.
+A single-file Roblox ESP featuring a polished in-game UI, persistent settings, combat-focused overlays, and client-side visual/performance tools.
 
-Current release: `v1.3.3`
+**Version:** `v1.3.3`
+
+---
 
 ## Overview
 
-[`esp.lua`](./esp.lua) is the full project. It builds the UI, handles saved config, draws ESP elements, and includes view plus performance utilities in one script.
+[`esp.lua`](./esp.lua) contains the entire project:
+- UI system  
+- Configuration handling  
+- ESP rendering  
+- View and performance utilities  
 
-The current build focuses on:
-- a cleaner tabbed UI
-- compact and scrollable menus
-- combat controls that are easier to tune live
-- practical defaults with saved settings
-- stronger target telemetry and config handling
+This build emphasises:
+- Structured tabbed UI  
+- Compact, scrollable menus  
+- Real-time combat tuning  
+- Stable defaults with persistent settings  
+- Improved target telemetry  
 
-## Highlights
+---
 
-- Team-aware ESP coloring
-- Highlight, `2D Box`, and `Corner Box` styles
-- Separate `BOX ESP` toggle so boxes can be disabled without losing the selected mode
-- Name, distance, health, weapon, skeleton, head dot, and focus target visuals
-- Distance fade for cleaner long-range rendering
-- Tracers with origin, thickness, and transparency controls
-- Optional split tracer style
-- Threat targeting with `Closest`, `Visible`, `Armed`, and `Smart` modes
-- Focus lock and expanded live target info
-- Custom crosshair with style, color, size, thickness, gap, and FOV-circle controls
-- Click-to-type numeric slider values for finer tuning
-- Freecam, spectate, spectate prev/next, freecam speed, reset view, and remove zoom limit
-- Mini live HUD
-- Performance tab with local visual optimization options
-- Tooltips for advanced settings
-- Settings persistence through `esp_settings.json`
-- Per-place saved configs with import/export support
-- Utility actions for rejoin, server hop, respawn, tool reset, and category resets
-- Window position save
+## Features
+
+### ESP System
+- Team-aware colouring  
+- Highlight, `2D Box`, and `Corner Box` styles  
+- Independent `BOX ESP` toggle  
+- Name, distance, health, and weapon display  
+- Skeleton ESP and head dot  
+- Focus target highlighting  
+- Distance-based fading  
+
+### Tracers
+- Configurable origin  
+- Adjustable thickness and transparency  
+- Optional split tracer mode  
+
+### Targeting
+- Modes: `Closest`, `Visible`, `Armed`, `Smart`  
+- Focus lock system  
+- Live target information panel  
+
+### Crosshair
+- Fully customisable (style, colour, size, gap, thickness)  
+- Optional FOV circle  
+
+### View Tools
+- Freecam with adjustable speed  
+- Spectate (with next/previous controls)  
+- Zoom limit removal  
+- View reset  
+
+### Performance
+- Boost mode  
+- Low materials  
+- Hide textures and effects  
+- Disable shadows  
+
+### Utility
+- Rejoin / server hop  
+- Respawn and tool reset  
+- Config import/export  
+- Per-place configuration saving  
+- Window position persistence  
+
+---
 
 ## Controls
 
-- `RightShift`: Toggle the full UI
-- `K`: Quick hide/show the menu window
-- `F4`: Toggle ESP
-- `End`: Panic disable and hide
-- `Escape`: Exit freecam
-- `Right Mouse`: Hold to look around in freecam
-- `W/A/S/D`, `Space`, `LeftControl`: Freecam movement
-- `LeftShift`: Faster freecam movement
+| Key            | Action                        |
+|----------------|-------------------------------|
+| RightShift     | Toggle full UI                |
+| K              | Toggle menu visibility        |
+| F4             | Toggle ESP                    |
+| End            | Panic disable                 |
+| Escape         | Exit freecam                  |
+| Right Mouse    | Look around (freecam)         |
+| W/A/S/D        | Move (freecam)                |
+| Space          | Move up (freecam)             |
+| LeftControl    | Move down (freecam)           |
+| LeftShift      | Increase speed (freecam)      |
 
-## Menu Layout
+---
+
+## Menu Structure
 
 ### Control
+**GENERAL**
+- ESP toggle  
+- Preset cycling  
+- Camera FOV  
+- Mini HUD  
+- Compact mode  
 
-- `GENERAL` sub-tab:
-  ESP enable toggle, preset cycling, camera FOV, mini HUD toggle, compact mode
-- `UTILITY` sub-tab:
-  Anti AFK, auto-load place preset, settings status, config import/export, rejoin, server hop, respawn, reset tools, category resets
+**UTILITY**
+- Anti-AFK  
+- Auto-load presets  
+- Config management  
+- Server actions  
+
+---
 
 ### Display
+- Player info toggles (name, distance, health, weapon)  
+- Skeleton ESP  
+- Head dot  
+- Focus target  
+- Target card display  
+- Text layout options  
+- Box ESP toggle and mode  
 
-- Name / distance / health / weapon toggles
-- Skeleton ESP
-- Head dot
-- Focus target
-- Target card toggle and compact mode
-- Inline / stacked text mode
-- Box ESP toggle
-- Box mode selector
+---
 
 ### Combat
 
-Combat is split into sub-tabs:
+**TARGET**
+- Threat mode  
+- Focus lock  
+- Target info card  
+- Heat vision  
+- Look direction  
+- Max distance  
 
-- `TARGET`
-  Threat mode, focus lock, target info card, heat vision, look direction, max distance
-- `TRACERS`
-  Tracer toggle, origin, style, thickness, transparency
-- `CROSSHAIR`
-  Crosshair toggle, style, color, thickness, size, gap, FOV circle controls
+**TRACERS**
+- Enable toggle  
+- Origin and style  
+- Thickness and transparency  
+
+**CROSSHAIR**
+- Enable toggle  
+- Style and colour  
+- Size, gap, thickness  
+- FOV circle  
+
+---
 
 ### View
+- Spectate system  
+- Freecam  
+- Speed control  
+- Zoom limit removal  
+- Reset view  
 
-- Spectate picker
-- Spectate prev / next
-- Freecam
-- Freecam speed
-- Remove zoom limit
-- Reset view
+---
 
-### Perf
+### Performance
+- Visual optimisation toggles  
+- Rendering simplifications  
 
-- Boost mode
-- Low materials
-- Hide textures
-- Hide effects
-- Disable shadows
+---
 
 ## Notes
 
-- The script is intentionally kept in one Lua file for easy loading and editing.
-- Saved settings require executor file API support.
-- Drawing-based elements fall back where possible if a drawing type is unavailable.
-- Performance changes are local visual adjustments only.
-- Reinject protection is built in so old instances do not keep fighting over camera and mouse state.
-- The focused target is highlighted with the yellow focus color for quicker visual confirmation.
-- `v1.3.2` removes the render-step camera FOV lock that could conflict with FPS gun systems.
-- `v1.3.3` improves cursor behavior for FPS gun systems and keeps the Roblox mouse icon hidden while the custom crosshair is active.
+- Single-file design for simplicity  
+- Requires executor file API for saving settings  
+- Drawing elements degrade gracefully if unsupported  
+- Performance settings are client-side only  
+- Reinjection protection prevents conflicts  
+- Focused target uses a distinct highlight colour  
+
+---
+
+## Changelog Highlights
+
+**v1.3.3**
+- Improved cursor behaviour for FPS systems  
+- Maintains hidden Roblox cursor when using custom crosshair  
+
+**v1.3.2**
+- Removed camera FOV lock conflict with FPS systems  
+
+---
 
 ## Setup
 
-1. Open the repository in your editor.
-2. Adjust defaults in [`esp.lua`](./esp.lua) if you want to change keybinds, colors, or feature defaults.
-3. Load the script in your Roblox environment.
+1. Open the repository in your editor  
+2. Modify defaults in [`esp.lua`](./esp.lua) if required  
+3. Execute 
+
+---
 
 ## Loadstring
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp.lua"))()
-```
-
-## Files
-
-- [`esp.lua`](./esp.lua): Main script
-- [`README.md`](./README.md): Project overview and usage
-- [`LICENSE`](./LICENSE): Repository license
-- [`.gitignore`](./.gitignore): Ignore rules
