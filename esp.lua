@@ -1461,6 +1461,8 @@ local function clearEntry(entry)
 		entry.title = nil
 		entry.healthBack = nil
 		entry.healthFill = nil
+		entry.devHalo = nil
+		entry.devRing = nil
 	end
 
 	if entry.tracer then
@@ -1546,6 +1548,50 @@ local function ensureBillboard(entry, character)
 		billboard.StudsOffset = Vector3.new(0, 2.8, 0)
 		billboard.Parent = character
 
+		local devHalo = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = THEME.accent,
+			BackgroundTransparency = 0.7,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0.5, 0, 0.36, 0),
+			Size = UDim2.new(0, 92, 0, 92),
+			Visible = false,
+			ZIndex = 0,
+			Parent = billboard,
+		})
+		addCorner(devHalo, 999)
+
+		create("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
+			}),
+			Rotation = 0,
+			Parent = devHalo,
+		})
+
+		local devRing = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = THEME.accent,
+			BackgroundTransparency = 0.78,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0.5, 0, 0.98, 0),
+			Size = UDim2.new(0, 72, 0, 18),
+			Visible = false,
+			ZIndex = 0,
+			Parent = billboard,
+		})
+		addCorner(devRing, 999)
+
+		create("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
+			}),
+			Rotation = 0,
+			Parent = devRing,
+		})
+
 		local title = create("TextLabel", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
@@ -1578,6 +1624,8 @@ local function ensureBillboard(entry, character)
 		addCorner(healthFill, 999)
 
 		entry.billboard = billboard
+		entry.devHalo = devHalo
+		entry.devRing = devRing
 		entry.title = title
 		entry.healthBack = healthBack
 		entry.healthFill = healthFill
@@ -2119,6 +2167,47 @@ local function getRainbowColor()
 	return Color3.fromHSV(hue, 0.85, 1)
 end
 
+local function updateDevAura(entry, character, rainbowColor)
+	if not entry.billboard then
+		return
+	end
+
+	local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
+	local halo = entry.devHalo
+	local ring = entry.devRing
+
+	if halo then
+		halo.Visible = true
+		halo.BackgroundColor3 = rainbowColor
+		halo.BackgroundTransparency = 0.78 - (pulse * 0.16)
+		halo.Size = UDim2.new(0, math.floor(88 + pulse * 18), 0, math.floor(88 + pulse * 18))
+		local haloGradient = halo:FindFirstChildOfClass("UIGradient")
+		if haloGradient then
+			haloGradient.Rotation = (tick() * 120) % 360
+		end
+	end
+
+	if ring then
+		ring.Visible = true
+		ring.BackgroundColor3 = rainbowColor
+		ring.BackgroundTransparency = 0.8 - (pulse * 0.12)
+		ring.Size = UDim2.new(0, math.floor(68 + pulse * 14), 0, math.floor(16 + pulse * 4))
+		local ringGradient = ring:FindFirstChildOfClass("UIGradient")
+		if ringGradient then
+			ringGradient.Rotation = (tick() * -150) % 360
+		end
+	end
+end
+
+local function hideDevAura(entry)
+	if entry.devHalo then
+		entry.devHalo.Visible = false
+	end
+	if entry.devRing then
+		entry.devRing.Visible = false
+	end
+end
+
 local function updatePlayerEsp(player)
 	local entry = getEspEntry(player)
 
@@ -2157,9 +2246,15 @@ local function updatePlayerEsp(player)
 
 	local highlight = ensureHighlight(entry, character)
 	highlight.FillColor = fillColor
-	highlight.FillTransparency = effectiveBoxMode == "Highlight" and CONFIG.fillTransparency or 1
+	if showDevTag then
+		local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
+		highlight.FillTransparency = 0.44 - (pulse * 0.14)
+		highlight.OutlineTransparency = 0.02 + (pulse * 0.08)
+	else
+		highlight.FillTransparency = effectiveBoxMode == "Highlight" and CONFIG.fillTransparency or 1
+		highlight.OutlineTransparency = effectiveBoxMode == "Highlight" and CONFIG.outlineTransparency or 1
+	end
 	highlight.OutlineColor = outlineColor
-	highlight.OutlineTransparency = effectiveBoxMode == "Highlight" and CONFIG.outlineTransparency or 1
 
 	if camera then
 		updateBoxEsp(entry, camera, character, outlineColor)
@@ -2196,8 +2291,10 @@ local function updatePlayerEsp(player)
 		title.Text = focusTarget and ("[TARGET] " .. table.concat(labelParts, " ")) or table.concat(labelParts, " ")
 		if showDevTag then
 			title.TextColor3 = devRainbowColor
+			updateDevAura(entry, character, devRainbowColor)
 		else
 			title.TextColor3 = focusTarget and THEME.focus or espColor
+			hideDevAura(entry)
 		end
 
 		if entry.healthBack and entry.healthFill and humanoid then
@@ -2219,6 +2316,8 @@ local function updatePlayerEsp(player)
 			entry.title = nil
 			entry.healthBack = nil
 			entry.healthFill = nil
+			entry.devHalo = nil
+			entry.devRing = nil
 		end
 	end
 
@@ -2323,6 +2422,11 @@ end
 local function hookCharacter(player)
 	player.CharacterAdded:Connect(function()
 		task.wait(0.2)
+		refreshAllEsp()
+	end)
+
+	player.CharacterAppearanceLoaded:Connect(function()
+		task.wait(0.1)
 		refreshAllEsp()
 	end)
 end
