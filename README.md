@@ -1,62 +1,87 @@
 # 0xVyrs Universal ROBLOX ESP Suite
 
-A compact Roblox ESP script with a custom in-game UI, team-based coloring, tracers, box modes, visibility checks, and a polished startup flow.
+A single-file Roblox ESP with a polished in-game menu, saved settings, combat-focused overlays, and client-side view/performance tools.
 
-Current release: `v1.0.0`
+Current release: `v1.2.0`
 
 ## Overview
 
-This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It includes a tabbed control panel, animated splash intro, keybinds, preset modes, and multiple visual ESP styles while keeping the layout practical and easy to use.
+[`esp.lua`](./esp.lua) is the full project. It builds the UI, handles saved config, draws ESP elements, and includes view plus performance utilities in one script.
 
-## Features
+The current build focuses on:
+- a cleaner tabbed UI
+- compact and scrollable menus
+- combat controls that are easier to tune live
+- practical defaults with saved settings
+
+## Highlights
 
 - Team-aware ESP coloring
-- Highlight, `2D Box`, and `Corner Box` modes
-- Name, distance, health, and weapon display
-- Tracers
-- Visibility / heat-vision coloring
-- Skeleton ESP
-- Focus target highlighting for the closest visible enemy
-- Compact mode
+- Highlight, `2D Box`, and `Corner Box` styles
+- Separate `BOX ESP` toggle so boxes can be disabled without losing the selected mode
+- Name, distance, health, weapon, skeleton, head dot, and focus target visuals
+- Distance fade for cleaner long-range rendering
+- Tracers with origin, thickness, and transparency controls
+- Threat targeting with `Closest`, `Visible`, `Armed`, and `Smart` modes
+- Focus lock and live target info
+- Custom crosshair with style, color, size, thickness, gap, and FOV-circle controls
+- Freecam, spectate, spectate prev/next, freecam speed, reset view, and remove zoom limit
 - Mini live HUD
-- Performance stats panel
-- Performance optimization tab
-- Startup intro animation
-- Toast notifications for setting changes
+- Performance tab with local visual optimization options
+- Tooltips for advanced settings
 - Settings persistence through `esp_settings.json`
+- Window position save
 
 ## Controls
 
-- `RightShift`: Toggle full UI
-- `K`: Quick hide / show menu
+- `RightShift`: Toggle the full UI
+- `K`: Quick hide/show the menu window
 - `F4`: Toggle ESP
-- `End`: Panic hide and disable
+- `End`: Panic disable and hide
+- `Escape`: Exit freecam
+- `Right Mouse`: Hold to look around in freecam
+- `W/A/S/D`, `Space`, `LeftControl`: Freecam movement
+- `LeftShift`: Faster freecam movement
 
-## Menu Tabs
+## Menu Layout
 
 ### Control
 
-- ESP enable / disable
+- ESP enable toggle
 - Preset cycling
-- Team check status
-- Quick hide key display
+- Camera FOV
 - Mini HUD toggle
 - Compact mode
-- Settings status
+- Settings/save status
 
 ### Display
 
-- ESP color status
 - Name / distance / health / weapon toggles
 - Skeleton ESP
-- Focus target toggle
+- Head dot
+- Focus target
+- Box ESP toggle
 - Box mode selector
 
 ### Combat
 
-- Heat vision
-- Tracers
-- Max distance
+Combat is split into sub-tabs:
+
+- `TARGET`
+  Threat mode, focus lock, target info, heat vision, look direction, max distance
+- `TRACERS`
+  Tracer toggle, origin, thickness, transparency
+- `CROSSHAIR`
+  Crosshair toggle, style, color, thickness, size, gap, FOV circle controls
+
+### View
+
+- Spectate picker
+- Spectate prev / next
+- Freecam
+- Freecam speed
+- Remove zoom limit
+- Reset view
 
 ### Perf
 
@@ -66,23 +91,18 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 - Hide effects
 - Disable shadows
 
-## Files
-
-- [`esp.lua`](./esp.lua): Main script
-- [`.gitignore`](./.gitignore): Repo ignore rules
-- [`LICENSE`](./LICENSE): Repository license
-
 ## Notes
 
-- This repo currently stores the ESP in a single Lua file for simplicity.
-- Local saved settings are written to `esp_settings.json` when supported by the executor environment.
-- If a drawing type is unsupported, the script falls back safely where possible.
-- Performance tweaks are applied locally and are intended as client-side visual optimizations.
+- The script is intentionally kept in one Lua file for easy loading and editing.
+- Saved settings require executor file API support.
+- Drawing-based elements fall back where possible if a drawing type is unavailable.
+- Performance changes are local visual adjustments only.
+- Reinject protection is built in so old instances do not keep fighting over camera and mouse state.
 
 ## Setup
 
-1. Open this repository folder in VS Code or your preferred editor.
-2. Edit [`esp.lua`](./esp.lua) if you want to change defaults, theme values, or keybinds.
+1. Open the repository in your editor.
+2. Adjust defaults in [`esp.lua`](./esp.lua) if you want to change keybinds, colors, or feature defaults.
 3. Load the script in your Roblox environment.
 
 ## Loadstring
@@ -91,6 +111,9 @@ This project is a single-file ESP suite built around [`esp.lua`](./esp.lua). It 
 loadstring(game:HttpGet("https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp.lua"))()
 ```
 
-## Status
+## Files
 
-This project is currently focused on being a clean, practical ESP suite with a polished UI and straightforward configuration.
+- [`esp.lua`](./esp.lua): Main script
+- [`README.md`](./README.md): Project overview and usage
+- [`LICENSE`](./LICENSE): Repository license
+- [`.gitignore`](./.gitignore): Ignore rules
