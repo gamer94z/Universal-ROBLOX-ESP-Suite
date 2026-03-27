@@ -1461,7 +1461,6 @@ local function clearEntry(entry)
 		entry.title = nil
 		entry.healthBack = nil
 		entry.healthFill = nil
-		entry.devHalo = nil
 		entry.devRing = nil
 	end
 
@@ -1548,28 +1547,6 @@ local function ensureBillboard(entry, character)
 		billboard.StudsOffset = Vector3.new(0, 2.8, 0)
 		billboard.Parent = character
 
-		local devHalo = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = THEME.accent,
-			BackgroundTransparency = 0.7,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 0, 0.36, 0),
-			Size = UDim2.new(0, 92, 0, 92),
-			Visible = false,
-			ZIndex = 0,
-			Parent = billboard,
-		})
-		addCorner(devHalo, 999)
-
-		create("UIGradient", {
-			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
-			}),
-			Rotation = 0,
-			Parent = devHalo,
-		})
-
 		local devRing = create("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			BackgroundColor3 = THEME.accent,
@@ -1624,7 +1601,6 @@ local function ensureBillboard(entry, character)
 		addCorner(healthFill, 999)
 
 		entry.billboard = billboard
-		entry.devHalo = devHalo
 		entry.devRing = devRing
 		entry.title = title
 		entry.healthBack = healthBack
@@ -2173,19 +2149,7 @@ local function updateDevAura(entry, character, rainbowColor)
 	end
 
 	local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
-	local halo = entry.devHalo
 	local ring = entry.devRing
-
-	if halo then
-		halo.Visible = true
-		halo.BackgroundColor3 = rainbowColor
-		halo.BackgroundTransparency = 0.78 - (pulse * 0.16)
-		halo.Size = UDim2.new(0, math.floor(88 + pulse * 18), 0, math.floor(88 + pulse * 18))
-		local haloGradient = halo:FindFirstChildOfClass("UIGradient")
-		if haloGradient then
-			haloGradient.Rotation = (tick() * 120) % 360
-		end
-	end
 
 	if ring then
 		ring.Visible = true
@@ -2200,9 +2164,6 @@ local function updateDevAura(entry, character, rainbowColor)
 end
 
 local function hideDevAura(entry)
-	if entry.devHalo then
-		entry.devHalo.Visible = false
-	end
 	if entry.devRing then
 		entry.devRing.Visible = false
 	end
@@ -2316,7 +2277,6 @@ local function updatePlayerEsp(player)
 			entry.title = nil
 			entry.healthBack = nil
 			entry.healthFill = nil
-			entry.devHalo = nil
 			entry.devRing = nil
 		end
 	end
