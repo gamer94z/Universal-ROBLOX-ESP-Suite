@@ -2,7 +2,7 @@
 
 A single-file Roblox ESP with a polished in-game menu, saved settings, combat-focused overlays, and client-side view/performance tools.
 
-Current release: `v1.2.0`
+Current release: `v1.3.1`
 
 ## Overview
 
@@ -13,6 +13,7 @@ The current build focuses on:
 - compact and scrollable menus
 - combat controls that are easier to tune live
 - practical defaults with saved settings
+- stronger target telemetry and config handling
 
 ## Highlights
 
@@ -22,14 +23,17 @@ The current build focuses on:
 - Name, distance, health, weapon, skeleton, head dot, and focus target visuals
 - Distance fade for cleaner long-range rendering
 - Tracers with origin, thickness, and transparency controls
+- Optional split tracer style
 - Threat targeting with `Closest`, `Visible`, `Armed`, and `Smart` modes
-- Focus lock and live target info
+- Focus lock and expanded live target info
 - Custom crosshair with style, color, size, thickness, gap, and FOV-circle controls
 - Freecam, spectate, spectate prev/next, freecam speed, reset view, and remove zoom limit
 - Mini live HUD
 - Performance tab with local visual optimization options
 - Tooltips for advanced settings
 - Settings persistence through `esp_settings.json`
+- Per-place saved configs with import/export support
+- Utility actions for rejoin, server hop, respawn, tool reset, and category resets
 - Window position save
 
 ## Controls
@@ -47,12 +51,10 @@ The current build focuses on:
 
 ### Control
 
-- ESP enable toggle
-- Preset cycling
-- Camera FOV
-- Mini HUD toggle
-- Compact mode
-- Settings/save status
+- `GENERAL` sub-tab:
+  ESP enable toggle, preset cycling, camera FOV, mini HUD toggle, compact mode
+- `UTILITY` sub-tab:
+  Anti AFK, auto-load place preset, settings status, config import/export, rejoin, server hop, respawn, reset tools, category resets
 
 ### Display
 
@@ -60,6 +62,8 @@ The current build focuses on:
 - Skeleton ESP
 - Head dot
 - Focus target
+- Target card toggle and compact mode
+- Inline / stacked text mode
 - Box ESP toggle
 - Box mode selector
 
@@ -68,9 +72,9 @@ The current build focuses on:
 Combat is split into sub-tabs:
 
 - `TARGET`
-  Threat mode, focus lock, target info, heat vision, look direction, max distance
+  Threat mode, focus lock, target info card, heat vision, look direction, max distance
 - `TRACERS`
-  Tracer toggle, origin, thickness, transparency
+  Tracer toggle, origin, style, thickness, transparency
 - `CROSSHAIR`
   Crosshair toggle, style, color, thickness, size, gap, FOV circle controls
 
@@ -98,6 +102,7 @@ Combat is split into sub-tabs:
 - Drawing-based elements fall back where possible if a drawing type is unavailable.
 - Performance changes are local visual adjustments only.
 - Reinject protection is built in so old instances do not keep fighting over camera and mouse state.
+- The focused target is highlighted with the yellow focus color for quicker visual confirmation.
 
 ## Setup
 

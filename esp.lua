@@ -18,6 +18,7 @@ local CONFIG = {
 	showWeapon = true,
 	showSkeleton = false,
 	showHeadDot = false,
+	headDotSize = 6,
 	showFocusTarget = true,
 	showBoxes = true,
 	threatMode = "Closest",
@@ -43,11 +44,19 @@ local CONFIG = {
 	compactMode = false,
 	showMiniHud = true,
 	showLookDirection = true,
+	antiAfk = false,
+	autoLoadGamePreset = true,
 	performanceMode = false,
 	simplifyMaterials = false,
 	hideTextures = false,
 	hideEffects = false,
 	disableShadows = false,
+	showTargetCard = true,
+	targetCardCompact = false,
+	textStackMode = "Inline",
+	tracerStyle = "Direct",
+	spectateMode = "Direct",
+	cameraRigPreset = "Mid",
 	fallbackEspColor = Color3.fromRGB(255, 2, 127),
 	visibleColor = Color3.fromRGB(117, 255, 160),
 	hiddenColor = Color3.fromRGB(255, 116, 116),
@@ -56,7 +65,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.2.0",
+	version = "1.3.1",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	uiToggleKey = Enum.KeyCode.RightShift,
@@ -186,6 +195,7 @@ local currentPresetIndex = 2
 local SETTING_KEYS
 local toastLayer
 local syncUiFromConfig
+local getCharacterRoot
 
 local function canUseFileApi()
 	return type(isfile) == "function" and type(readfile) == "function" and type(writefile) == "function"
@@ -204,14 +214,24 @@ local function loadSettings()
 		return
 	end
 
+	local configSource = decoded
+	if decoded.placeConfigs and decoded.placeConfigs[tostring(game.PlaceId)] and decoded.placeConfigs[tostring(game.PlaceId)].settings and decoded.autoLoadGamePreset ~= false then
+		configSource = decoded.placeConfigs[tostring(game.PlaceId)].settings
+	end
+
 	for _, key in ipairs(SETTING_KEYS) do
-		if decoded[key] ~= nil then
-			CONFIG[key] = decoded[key]
+		if configSource[key] ~= nil then
+			CONFIG[key] = configSource[key]
 		end
 	end
 
-	if decoded.currentPresetIndex and PRESETS[decoded.currentPresetIndex] then
-		currentPresetIndex = decoded.currentPresetIndex
+	local presetIndex = decoded.currentPresetIndex
+	if decoded.placeConfigs and decoded.placeConfigs[tostring(game.PlaceId)] and decoded.placeConfigs[tostring(game.PlaceId)].currentPresetIndex and decoded.autoLoadGamePreset ~= false then
+		presetIndex = decoded.placeConfigs[tostring(game.PlaceId)].currentPresetIndex
+	end
+
+	if presetIndex and PRESETS[presetIndex] then
+		currentPresetIndex = presetIndex
 	end
 end
 
@@ -220,12 +240,32 @@ local function saveSettings()
 		return
 	end
 
-	local payload = {
-		currentPresetIndex = currentPresetIndex,
-	}
+	local payload = {}
+
+	if isfile(SETTINGS_FILE) then
+		pcall(function()
+			local existing = HttpService:JSONDecode(readfile(SETTINGS_FILE))
+			if type(existing) == "table" then
+				payload = existing
+			end
+		end)
+	end
+
+	payload.currentPresetIndex = currentPresetIndex
+	payload.autoLoadGamePreset = CONFIG.autoLoadGamePreset
 
 	for _, key in ipairs(SETTING_KEYS) do
 		payload[key] = CONFIG[key]
+	end
+
+	payload.placeConfigs = payload.placeConfigs or {}
+	payload.placeConfigs[tostring(game.PlaceId)] = {
+		currentPresetIndex = currentPresetIndex,
+		settings = {},
+	}
+
+	for _, key in ipairs(SETTING_KEYS) do
+		payload.placeConfigs[tostring(game.PlaceId)].settings[key] = CONFIG[key]
 	end
 
 	pcall(function()
@@ -464,6 +504,48 @@ miniHudLabels.tooltipLabel.AutomaticSize = Enum.AutomaticSize.XY
 miniHudLabels.tooltipLabel.TextWrapped = true
 miniHudLabels.tooltipLabel.Size = UDim2.new(0, 220, 0, 0)
 miniHudLabels.tooltipLabel.ZIndex = 41
+miniHudLabels.utility = {
+	lastHealth = {},
+	killCredit = {},
+}
+
+miniHudLabels.utility.killText = create("TextLabel", {
+	AnchorPoint = Vector2.new(0.5, 1),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0.5, 0, 1, -108),
+	Size = UDim2.new(0, 380, 0, 30),
+	Font = Enum.Font.GothamBlack,
+	RichText = true,
+	Text = "",
+	TextColor3 = THEME.text,
+	TextSize = 20,
+	TextStrokeColor3 = Color3.fromRGB(0, 0, 0),
+	TextStrokeTransparency = 0.55,
+	TextTransparency = 1,
+	Visible = false,
+	ZIndex = 19,
+	Parent = gui,
+})
+
+miniHudLabels.utility.killTextGlow = create("TextLabel", {
+	AnchorPoint = Vector2.new(0.5, 1),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = miniHudLabels.utility.killText.Position + UDim2.new(0, 0, 0, 1),
+	Size = miniHudLabels.utility.killText.Size,
+	Font = Enum.Font.GothamBlack,
+	RichText = true,
+	Text = "",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextSize = 20,
+	TextStrokeColor3 = Color3.fromRGB(255, 68, 68),
+	TextStrokeTransparency = 0.85,
+	TextTransparency = 1,
+	Visible = false,
+	ZIndex = 18,
+	Parent = gui,
+})
 
 miniHudLabels.bindTooltip = function(guiObject, text)
 	guiObject.MouseEnter:Connect(function()
@@ -479,6 +561,76 @@ miniHudLabels.bindTooltip = function(guiObject, text)
 
 	guiObject.MouseLeave:Connect(function()
 		miniHudLabels.tooltipFrame.Visible = false
+	end)
+end
+
+miniHudLabels.utility.applyAntiAfk = function()
+	if miniHudLabels.utility.idleConnection then
+		miniHudLabels.utility.idleConnection:Disconnect()
+		miniHudLabels.utility.idleConnection = nil
+	end
+
+	if CONFIG.antiAfk then
+		miniHudLabels.utility.idleConnection = LOCAL_PLAYER.Idled:Connect(function()
+			pcall(function()
+				game:GetService("VirtualUser"):CaptureController()
+				game:GetService("VirtualUser"):ClickButton2(Vector2.new())
+			end)
+		end)
+	end
+end
+
+miniHudLabels.utility.showKillText = function(text)
+	local label = miniHudLabels.utility.killText
+	local glow = miniHudLabels.utility.killTextGlow
+	if not label or not glow then
+		return
+	end
+
+	local richText = text
+		:gsub("&", "&amp;")
+		:gsub("<", "&lt;")
+		:gsub(">", "&gt;")
+		:gsub("killed", "<font color=\"#FF5A5A\">killed</font>")
+
+	label.Text = richText
+	glow.Text = richText
+	label.Visible = true
+	glow.Visible = true
+	label.TextTransparency = 1
+	label.TextStrokeTransparency = 1
+	glow.TextTransparency = 1
+	glow.TextStrokeTransparency = 1
+
+	TweenService:Create(label, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		TextTransparency = 0,
+		TextStrokeTransparency = 0.55,
+	}):Play()
+	TweenService:Create(glow, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		TextTransparency = 0.18,
+		TextStrokeTransparency = 0.82,
+	}):Play()
+
+	task.delay(1.4, function()
+		if not label or label.Text ~= richText then
+			return
+		end
+
+		TweenService:Create(label, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			TextTransparency = 1,
+			TextStrokeTransparency = 1,
+		}):Play()
+		TweenService:Create(glow, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			TextTransparency = 1,
+			TextStrokeTransparency = 1,
+		}):Play()
+
+		task.delay(0.24, function()
+			if label and label.Text == richText then
+				label.Visible = false
+				glow.Visible = false
+			end
+		end)
 	end)
 end
 
@@ -597,6 +749,54 @@ PRESETS = {
 			CONFIG.boxMode = "Corner Box"
 		end,
 	},
+	{
+		name = "Rage",
+		apply = function()
+			CONFIG.showNames = true
+			CONFIG.showDistance = true
+			CONFIG.showHealth = true
+			CONFIG.showWeapon = true
+			CONFIG.visibilityCheck = true
+			CONFIG.showTracers = true
+			CONFIG.showSkeleton = true
+			CONFIG.showHeadDot = true
+			CONFIG.showLookDirection = true
+			CONFIG.focusLock = true
+			CONFIG.boxMode = "Corner Box"
+			CONFIG.tracerStyle = "Split"
+		end,
+	},
+	{
+		name = "Streamer",
+		apply = function()
+			CONFIG.showNames = false
+			CONFIG.showDistance = true
+			CONFIG.showHealth = false
+			CONFIG.showWeapon = false
+			CONFIG.visibilityCheck = true
+			CONFIG.showTracers = true
+			CONFIG.showSkeleton = false
+			CONFIG.showHeadDot = false
+			CONFIG.showLookDirection = false
+			CONFIG.boxMode = "Highlight"
+			CONFIG.tracerStyle = "Direct"
+		end,
+	},
+	{
+		name = "Performance",
+		apply = function()
+			CONFIG.showNames = true
+			CONFIG.showDistance = true
+			CONFIG.showHealth = false
+			CONFIG.showWeapon = false
+			CONFIG.showSkeleton = false
+			CONFIG.showHeadDot = false
+			CONFIG.showTracers = true
+			CONFIG.visibilityCheck = false
+			CONFIG.performanceMode = true
+			CONFIG.boxMode = "Highlight"
+		end,
+	},
 }
 
 local BOX_MODE_OPTIONS = { "Highlight", "2D Box", "Corner Box" }
@@ -642,6 +842,7 @@ SETTING_KEYS = {
 	"showWeapon",
 	"showSkeleton",
 	"showHeadDot",
+	"headDotSize",
 	"showFocusTarget",
 	"showBoxes",
 	"threatMode",
@@ -667,11 +868,19 @@ SETTING_KEYS = {
 	"compactMode",
 	"showMiniHud",
 	"showLookDirection",
+	"antiAfk",
+	"autoLoadGamePreset",
 	"performanceMode",
 	"simplifyMaterials",
 	"hideTextures",
 	"hideEffects",
 	"disableShadows",
+	"showTargetCard",
+	"targetCardCompact",
+	"textStackMode",
+	"tracerStyle",
+	"spectateMode",
+	"cameraRigPreset",
 	"maxDistance",
 	"windowOffsetX",
 	"windowOffsetY",
@@ -1294,41 +1503,6 @@ local function setToggleState(button, state)
 	end
 end
 
-local actionRow = create("Frame", {
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 36),
-	Parent = pages.control,
-})
-
-local applyButton = create("TextButton", {
-	BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-	BorderSizePixel = 0,
-	Font = Enum.Font.GothamMedium,
-	Size = UDim2.new(0.62, -3, 1, 0),
-	Text = "APPLY ESP",
-	TextColor3 = THEME.text,
-	TextSize = 12,
-	Parent = actionRow,
-})
-addCorner(applyButton, 8)
-addStroke(applyButton, THEME.border, 0.2, 1)
-
-local killButton = create("TextButton", {
-	AnchorPoint = Vector2.new(1, 0),
-	BackgroundColor3 = Color3.fromRGB(34, 63, 101),
-	BorderSizePixel = 0,
-	Font = Enum.Font.GothamBold,
-	Position = UDim2.new(1, 0, 0, 0),
-	Size = UDim2.new(0.38, 0, 1, 0),
-	Text = "KILL",
-	TextColor3 = Color3.fromRGB(252, 241, 211),
-	TextSize = 12,
-	Parent = actionRow,
-})
-addCorner(killButton, 8)
-addStroke(killButton, THEME.accent, 0.1, 1)
-
 do
 	local headerRow, headerValue = createStatusRow(pages.control, "CONTROL", "ACTIVE")
 	headerRow.BackgroundColor3 = THEME.panelAlt
@@ -1336,6 +1510,97 @@ do
 end
 
 miniHudLabels.perfStats = select(2, createPerfRow(pages.control))
+
+do
+	local row = createRow(pages.control, 30)
+	local holder = create("Frame", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 10, 0, 5),
+		Size = UDim2.new(1, -20, 0, 20),
+		Parent = row,
+	})
+
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = holder,
+	})
+
+	miniHudLabels.utility.controlTabs = {}
+
+	for _, item in ipairs({
+		{ key = "general", label = "GENERAL", width = 86 },
+		{ key = "utility", label = "UTILITY", width = 78 },
+	}) do
+		miniHudLabels.utility.controlTabs[item.key] = create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundColor3 = item.key == "general" and THEME.accentSoft or Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, item.width, 1, 0),
+			Font = Enum.Font.GothamBold,
+			Text = item.label,
+			TextColor3 = item.key == "general" and THEME.text or THEME.muted,
+			TextSize = 9,
+			Parent = holder,
+		})
+		addCorner(miniHudLabels.utility.controlTabs[item.key], 999)
+		addStroke(miniHudLabels.utility.controlTabs[item.key], THEME.border, item.key == "general" and 0.15 or 0.5, 1)
+	end
+
+	local body = create("Frame", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, 0, 0, 0),
+		Parent = pages.control,
+	})
+
+	create("UIListLayout", {
+		Padding = UDim.new(0, 0),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = body,
+	})
+
+	for _, item in ipairs({ "general", "utility" }) do
+		miniHudLabels.utility.controlTabs[item .. "Page"] = create("Frame", {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AutomaticSize = Enum.AutomaticSize.Y,
+			Size = UDim2.new(1, 0, 0, 0),
+			Visible = item == "general",
+			Parent = body,
+		})
+
+		create("UIListLayout", {
+			Padding = UDim.new(0, 5),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = miniHudLabels.utility.controlTabs[item .. "Page"],
+		})
+	end
+
+	miniHudLabels.utility.setControlTab = function(tabName)
+		for _, item in ipairs({ "general", "utility" }) do
+			local selected = item == tabName
+			miniHudLabels.utility.controlTabs[item].BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
+			miniHudLabels.utility.controlTabs[item].TextColor3 = selected and THEME.text or THEME.muted
+			miniHudLabels.utility.controlTabs[item .. "Page"].Visible = selected
+			local stroke = miniHudLabels.utility.controlTabs[item]:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = selected and 0.15 or 0.5
+			end
+		end
+	end
+
+	miniHudLabels.utility.controlTabs.general.MouseButton1Click:Connect(function()
+		miniHudLabels.utility.setControlTab("general")
+	end)
+
+	miniHudLabels.utility.controlTabs.utility.MouseButton1Click:Connect(function()
+		miniHudLabels.utility.setControlTab("utility")
+	end)
+end
 
 do
 	local headerRow, headerValue = createStatusRow(pages.display, "DISPLAY", "ACTIVE")
@@ -1463,13 +1728,193 @@ createStatusRow(pages.display, "ESP COLOR", "AUTO TEAM")
 
 local enabledToggle = select(2, createToggleRow(pages.control, "ESP ENABLED", CONFIG.enabled))
 local presetButton = select(2, createCycleRow(pages.control, "PRESET", PRESETS[currentPresetIndex].name))
-createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
-createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
+miniHudLabels.utility.teamCheckRow = createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
+miniHudLabels.utility.quickHideRow = createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
 local cameraFovSlider = createSliderRow(pages.control, "CAMERA FOV", CONFIG.cameraFov, 40, 120)
 cameraFovSlider.reset = select(2, createCycleRow(pages.control, "RESET CAMERA", "DEFAULT"))
 local miniHudToggle = select(2, createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud))
 local compactToggle = select(2, createToggleRow(pages.control, "COMPACT MODE", CONFIG.compactMode))
+miniHudLabels.utility.antiAfk = select(2, createToggleRow(pages.control, "ANTI AFK", CONFIG.antiAfk))
+miniHudLabels.utility.autoLoadGamePreset = select(2, createToggleRow(pages.control, "AUTO LOAD PLACE PRESET", CONFIG.autoLoadGamePreset))
 miniHudLabels.saveStatusValue = select(2, createStatusRow(pages.control, "SETTINGS", canUseFileApi() and "AUTO SAVE" or "MEMORY"))
+
+do
+	local row = createRow(pages.control, 30)
+	local exportConfig = create("TextButton", {
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(0, 10, 0.5, -10),
+		Size = UDim2.new(0.48, -6, 0, 20),
+		Text = "EXPORT CFG",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(exportConfig, 4)
+	addStroke(exportConfig, THEME.border, 0.35, 1)
+
+	local importConfig = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(1, -10, 0.5, -10),
+		Size = UDim2.new(0.48, -6, 0, 20),
+		Text = "IMPORT CFG",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(importConfig, 4)
+	addStroke(importConfig, THEME.border, 0.35, 1)
+
+	miniHudLabels.utility.exportConfig = exportConfig
+	miniHudLabels.utility.importConfig = importConfig
+end
+
+do
+	local row = createRow(pages.control, 30)
+	local resetDisplay = create("TextButton", {
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(0, 10, 0.5, -10),
+		Size = UDim2.new(0.31, -4, 0, 20),
+		Text = "RST DSP",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(resetDisplay, 4)
+	addStroke(resetDisplay, THEME.border, 0.35, 1)
+
+	local resetView = create("TextButton", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(0.5, 0, 0.5, -10),
+		Size = UDim2.new(0.31, -4, 0, 20),
+		Text = "RST VIEW",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(resetView, 4)
+	addStroke(resetView, THEME.border, 0.35, 1)
+
+	local resetPerf = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(1, -10, 0.5, -10),
+		Size = UDim2.new(0.31, -4, 0, 20),
+		Text = "RST PERF",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(resetPerf, 4)
+	addStroke(resetPerf, THEME.border, 0.35, 1)
+
+	miniHudLabels.utility.resetDisplay = resetDisplay
+	miniHudLabels.utility.resetView = resetView
+	miniHudLabels.utility.resetPerformance = resetPerf
+end
+
+do
+	local row = createRow(pages.control, 30)
+	local rejoin = create("TextButton", {
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(0, 10, 0.5, -10),
+		Size = UDim2.new(0.48, -6, 0, 20),
+		Text = "REJOIN",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(rejoin, 4)
+	addStroke(rejoin, THEME.border, 0.35, 1)
+
+	local hop = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(1, -10, 0.5, -10),
+		Size = UDim2.new(0.48, -6, 0, 20),
+		Text = "SERVER HOP",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(hop, 4)
+	addStroke(hop, THEME.border, 0.35, 1)
+
+	miniHudLabels.utility.rejoin = rejoin
+	miniHudLabels.utility.hop = hop
+end
+
+do
+	local row = createRow(pages.control, 30)
+	local respawn = create("TextButton", {
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(0, 10, 0.5, -10),
+		Size = UDim2.new(0.48, -6, 0, 20),
+		Text = "RESPAWN",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(respawn, 4)
+	addStroke(respawn, THEME.border, 0.35, 1)
+
+	local tools = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(1, -10, 0.5, -10),
+		Size = UDim2.new(0.48, -6, 0, 20),
+		Text = "RESET TOOLS",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(tools, 4)
+	addStroke(tools, THEME.border, 0.35, 1)
+
+	miniHudLabels.utility.respawn = respawn
+	miniHudLabels.utility.tools = tools
+end
+
+do
+	select(1, miniHudLabels.utility.teamCheckRow).Parent = miniHudLabels.utility.controlTabs.generalPage
+	select(1, miniHudLabels.utility.quickHideRow).Parent = miniHudLabels.utility.controlTabs.generalPage
+	enabledToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	presetButton.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	cameraFovSlider.bar.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	cameraFovSlider.reset.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	compactToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+
+	miniHudLabels.utility.antiAfk.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.autoLoadGamePreset.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.saveStatusValue.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.rejoin.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.hop.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.respawn.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.tools.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.exportConfig.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.resetDisplay.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.setControlTab("general")
+end
 
 local displayToggles = {
 	names = select(2, createToggleRow(pages.display, "NAME ABOVE HEAD", CONFIG.showNames)),
@@ -1479,62 +1924,111 @@ local displayToggles = {
 	weapon = select(2, createToggleRow(pages.display, "SHOW WEAPON", CONFIG.showWeapon)),
 	skeleton = select(2, createToggleRow(pages.display, "SKELETON ESP", CONFIG.showSkeleton)),
 	headDot = select(2, createToggleRow(pages.display, "HEAD DOT", CONFIG.showHeadDot)),
+	headDotSize = createSliderRow(pages.display, "HEAD DOT SIZE", CONFIG.headDotSize, 2, 12),
 	focus = select(2, createToggleRow(pages.display, "FOCUS TARGET", CONFIG.showFocusTarget)),
 	boxes = select(2, createToggleRow(pages.display, "BOX ESP", CONFIG.showBoxes)),
 	boxMode = select(2, createCycleRow(pages.display, "BOX MODE", CONFIG.boxMode)),
 }
+displayToggles.targetCard = select(2, createToggleRow(pages.display, "TARGET CARD", CONFIG.showTargetCard))
+displayToggles.targetCardCompact = select(2, createToggleRow(pages.display, "TARGET CARD COMPACT", CONFIG.targetCardCompact))
+displayToggles.textStack = select(2, createCycleRow(pages.display, "TEXT STACK", CONFIG.textStackMode))
 
-local visibilityToggle = select(2, createToggleRow(pages.combat, "HEAT VISION", CONFIG.visibilityCheck))
-local tracersToggle = select(2, createToggleRow(pages.combat, "TRACERS", CONFIG.showTracers))
-local tracerOriginButton = select(2, createCycleRow(pages.combat, "TRACER ORIGIN", CONFIG.tracerOriginMode))
-tracerSliders.targetInfo = select(2, createStatusRow(pages.combat, "TARGET", "NONE"))
+tracerSliders.visibilityToggle = select(2, createToggleRow(pages.combat, "HEAT VISION", CONFIG.visibilityCheck))
+tracerSliders.tracersToggle = select(2, createToggleRow(pages.combat, "TRACERS", CONFIG.showTracers))
+tracerSliders.tracerOriginButton = select(2, createCycleRow(pages.combat, "TRACER ORIGIN", CONFIG.tracerOriginMode))
+tracerSliders.style = select(2, createCycleRow(pages.combat, "TRACER STYLE", CONFIG.tracerStyle))
+do
+	local row = createRow(pages.combat, 76)
+	row.BackgroundColor3 = THEME.panelAlt
+	tracerSliders.targetCard = row
+
+	local label = makeLabel(row, "TARGET", 9, THEME.muted, Enum.Font.GothamBold)
+	label.Position = UDim2.new(0, 10, 0, 6)
+	label.Size = UDim2.new(0, 70, 0, 10)
+
+	tracerSliders.targetInfo = makeLabel(row, "NONE", 12, THEME.text, Enum.Font.GothamBold)
+	tracerSliders.targetInfo.Position = UDim2.new(0, 10, 0, 18)
+	tracerSliders.targetInfo.Size = UDim2.new(1, -20, 0, 14)
+	tracerSliders.targetInfo.TextXAlignment = Enum.TextXAlignment.Left
+	tracerSliders.targetInfo.TextTruncate = Enum.TextTruncate.AtEnd
+
+	tracerSliders.targetInfoMeta = makeLabel(row, "No focus target", 9, THEME.muted, Enum.Font.GothamMedium)
+	tracerSliders.targetInfoMeta.Position = UDim2.new(0, 10, 0, 36)
+	tracerSliders.targetInfoMeta.Size = UDim2.new(1, -20, 0, 10)
+	tracerSliders.targetInfoMeta.TextXAlignment = Enum.TextXAlignment.Left
+	tracerSliders.targetInfoMeta.TextTruncate = Enum.TextTruncate.AtEnd
+
+	tracerSliders.targetInfoMeta2 = makeLabel(row, "--", 9, THEME.muted, Enum.Font.GothamMedium)
+	tracerSliders.targetInfoMeta2.Position = UDim2.new(0, 10, 0, 50)
+	tracerSliders.targetInfoMeta2.Size = UDim2.new(1, -20, 0, 10)
+	tracerSliders.targetInfoMeta2.TextXAlignment = Enum.TextXAlignment.Left
+	tracerSliders.targetInfoMeta2.TextTruncate = Enum.TextTruncate.AtEnd
+
+	tracerSliders.targetBadge = create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(1, -10, 0, 10),
+		Size = UDim2.new(0, 92, 0, 18),
+		Text = "NO LOCK",
+		TextColor3 = THEME.muted,
+		TextSize = 8,
+		Parent = row,
+	})
+	addCorner(tracerSliders.targetBadge, 999)
+	addStroke(tracerSliders.targetBadge, THEME.border, 0.35, 1)
+end
 tracerSliders.focusLock = select(2, createToggleRow(pages.combat, "FOCUS LOCK", CONFIG.focusLock))
 tracerSliders.threatMode = select(2, createCycleRow(pages.combat, "THREAT MODE", CONFIG.threatMode))
 tracerSliders.thickness = createSliderRow(pages.combat, "TRACER THICKNESS", CONFIG.tracerThickness, 1, 4)
 tracerSliders.transparency = createSliderRow(pages.combat, "TRACER TRANSPARENCY", CONFIG.tracerTransparency, 20, 100)
-local lookDirectionToggle = select(2, createToggleRow(pages.combat, "LOOK DIRECTION", CONFIG.showLookDirection))
+tracerSliders.lookDirectionToggle = select(2, createToggleRow(pages.combat, "LOOK DIRECTION", CONFIG.showLookDirection))
 tracerSliders.maxDistance = createSliderRow(pages.combat, "MAX DISTANCE", CONFIG.maxDistance, 250, 5000)
-local fovCircleSlider = createSliderRow(pages.combat, "FOV CIRCLE", CONFIG.fovRadius, 60, 300)
+tracerSliders.fovCircleSlider = createSliderRow(pages.combat, "FOV CIRCLE", CONFIG.fovRadius, 60, 300)
 tracerSliders.fovThickness = createSliderRow(pages.combat, "FOV THICKNESS", CONFIG.fovCircleThickness, 1, 4)
 tracerSliders.fovTransparency = createSliderRow(pages.combat, "FOV TRANSPARENCY", CONFIG.fovCircleTransparency, 10, 100)
-fovCircleSlider.reset = select(2, createCycleRow(pages.combat, "RESET CIRCLE", "DEFAULT"))
-local crosshairToggle = select(2, createToggleRow(pages.combat, "CROSSHAIR", CONFIG.showCrosshair))
-local crosshairStyleButton = select(2, createCycleRow(pages.combat, "CROSSHAIR STYLE", CONFIG.crosshairStyle))
+tracerSliders.fovCircleSlider.reset = select(2, createCycleRow(pages.combat, "RESET CIRCLE", "DEFAULT"))
+tracerSliders.crosshairToggle = select(2, createToggleRow(pages.combat, "CROSSHAIR", CONFIG.showCrosshair))
+tracerSliders.crosshairStyleButton = select(2, createCycleRow(pages.combat, "CROSSHAIR STYLE", CONFIG.crosshairStyle))
 local crosshairColorButtons = select(2, createOptionButtonsRow(pages.combat, "CROSSHAIR COLOR", { "White", "Blue", "Green", "Red", "Yellow", "Pink" }, CONFIG.crosshairColor))
 tracerSliders.crosshairThickness = createSliderRow(pages.combat, "CROSSHAIR THICKNESS", CONFIG.crosshairThickness, 1, 4)
-local crosshairSizeSlider = createSliderRow(pages.combat, "CROSSHAIR SIZE", CONFIG.crosshairSize, CROSSHAIR_SIZE_OPTIONS[1], CROSSHAIR_SIZE_OPTIONS[#CROSSHAIR_SIZE_OPTIONS])
+tracerSliders.crosshairSizeSlider = createSliderRow(pages.combat, "CROSSHAIR SIZE", CONFIG.crosshairSize, CROSSHAIR_SIZE_OPTIONS[1], CROSSHAIR_SIZE_OPTIONS[#CROSSHAIR_SIZE_OPTIONS])
 tracerSliders.crosshairGap = createSliderRow(pages.combat, "CROSSHAIR GAP", CONFIG.crosshairGap, 0, 10)
 
 do
-	tracerSliders.targetInfo.Parent.Parent = tracerSliders.tabs.targetingPage
+	tracerSliders.targetCard.Parent = tracerSliders.tabs.targetingPage
 	tracerSliders.focusLock.Parent.Parent = tracerSliders.tabs.targetingPage
 	tracerSliders.threatMode.Parent.Parent = tracerSliders.tabs.targetingPage
 	tracerSliders.maxDistance.bar.Parent.Parent = tracerSliders.tabs.targetingPage
-	visibilityToggle.Parent.Parent = tracerSliders.tabs.targetingPage
-	lookDirectionToggle.Parent.Parent = tracerSliders.tabs.targetingPage
+	tracerSliders.visibilityToggle.Parent.Parent = tracerSliders.tabs.targetingPage
+	tracerSliders.lookDirectionToggle.Parent.Parent = tracerSliders.tabs.targetingPage
 
-	tracersToggle.Parent.Parent = tracerSliders.tabs.tracersPage
-	tracerOriginButton.Parent.Parent = tracerSliders.tabs.tracersPage
+	tracerSliders.tracersToggle.Parent.Parent = tracerSliders.tabs.tracersPage
+	tracerSliders.tracerOriginButton.Parent.Parent = tracerSliders.tabs.tracersPage
+	tracerSliders.style.Parent.Parent = tracerSliders.tabs.tracersPage
 	tracerSliders.thickness.bar.Parent.Parent = tracerSliders.tabs.tracersPage
 	tracerSliders.transparency.bar.Parent.Parent = tracerSliders.tabs.tracersPage
 
-	fovCircleSlider.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.fovCircleSlider.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.fovThickness.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.fovTransparency.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
-	fovCircleSlider.reset.Parent.Parent = tracerSliders.tabs.crosshairPage
-	crosshairToggle.Parent.Parent = tracerSliders.tabs.crosshairPage
-	crosshairStyleButton.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.fovCircleSlider.reset.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.crosshairToggle.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.crosshairStyleButton.Parent.Parent = tracerSliders.tabs.crosshairPage
 	crosshairColorButtons[1].button.Parent.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.crosshairThickness.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
-	crosshairSizeSlider.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.crosshairSizeSlider.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.crosshairGap.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.setCombatTab("targeting")
 end
 
 miniHudLabels.bindTooltip(displayToggles.boxes, "Turns all box and highlight ESP on or off without losing your selected box style.")
 miniHudLabels.bindTooltip(displayToggles.boxMode, "Cycles the box style used when box ESP is enabled.")
-miniHudLabels.bindTooltip(visibilityToggle, "Uses line-of-sight checks so visible enemies can be styled differently from hidden ones.")
-miniHudLabels.bindTooltip(tracerOriginButton, "Changes where tracers start: bottom of screen, center, or your crosshair.")
+miniHudLabels.bindTooltip(displayToggles.headDotSize.bar, "Controls how small or aggressive the head dot marker appears.")
+miniHudLabels.bindTooltip(tracerSliders.visibilityToggle, "Uses line-of-sight checks so visible enemies can be styled differently from hidden ones.")
+miniHudLabels.bindTooltip(tracerSliders.tracerOriginButton, "Changes where tracers start: bottom of screen, center, or your crosshair.")
+miniHudLabels.bindTooltip(tracerSliders.style, "Direct draws a straight line, Split adds a segmented tactical snapline.")
 miniHudLabels.bindTooltip(tracerSliders.focusLock, "Keeps the current focus target locked until it becomes invalid or leaves range.")
 miniHudLabels.bindTooltip(tracerSliders.threatMode, "Controls how the script chooses the priority target: closest, visible, armed, or smart.")
 miniHudLabels.bindTooltip(tracerSliders.maxDistance.bar, "Sets the maximum distance where ESP elements will render.")
@@ -1542,6 +2036,7 @@ miniHudLabels.bindTooltip(tracerSliders.crosshairThickness.bar, "Adjusts the thi
 miniHudLabels.bindTooltip(tracerSliders.crosshairGap.bar, "Controls the spacing between the crosshair center and its outer lines.")
 miniHudLabels.bindTooltip(tracerSliders.fovThickness.bar, "Adjusts the outline thickness of the FOV circle.")
 miniHudLabels.bindTooltip(tracerSliders.fovTransparency.bar, "Controls how visible or faint the FOV circle appears.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.antiAfk, "Prevents Roblox from marking you idle by simulating local input when the idle prompt appears.")
 
 local viewButtons = {
 	status = select(2, createStatusRow(pages.view, "STATUS", "LOCAL")),
@@ -1601,6 +2096,7 @@ local performanceToggles = {
 local espObjects = {}
 local drawingSupported = DRAWING_SUPPORT.line
 local focusedPlayer = nil
+miniHudLabels.utility.targetTelemetry = {}
 local performanceCache = {
 	parts = {},
 	textures = {},
@@ -1690,6 +2186,141 @@ local function getHeldToolName(character)
 	end
 
 	return nil
+end
+
+local function getMovementState(character, root)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local velocity = root and root.AssemblyLinearVelocity or Vector3.zero
+	local planarSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+
+	if humanoid then
+		if humanoid.FloorMaterial == Enum.Material.Air then
+			return velocity.Y > 1 and "Jumping" or "Falling"
+		end
+		if planarSpeed > 18 then
+			return "Sprinting"
+		end
+		if planarSpeed > 2 then
+			return "Moving"
+		end
+	end
+
+	return "Idle"
+end
+
+local function getTargetThreatData(player, character, root, localRoot, visible)
+	local nearbyThreats = 0
+	local groupRadius = 28
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+		if otherPlayer ~= LOCAL_PLAYER and otherPlayer ~= player and (not isSameTeam(otherPlayer) or otherPlayer.UserId == DEV_USER_ID) then
+			local otherCharacter = otherPlayer.Character
+			local otherRoot = otherCharacter and getCharacterRoot(otherCharacter)
+			if otherRoot and (otherRoot.Position - root.Position).Magnitude <= groupRadius then
+				nearbyThreats = nearbyThreats + 1
+			end
+		end
+	end
+
+	local distance = localRoot and (root.Position - localRoot.Position).Magnitude or math.huge
+	local distanceFactor = 0
+	if distance < math.huge then
+		distanceFactor = math.clamp((CONFIG.maxDistance - distance) / math.max(CONFIG.maxDistance, 1), 0, 1)
+	end
+
+	local heldTool = getHeldToolName(character)
+	local aimingAtYou = false
+	if localRoot then
+		local toLocal = (localRoot.Position - root.Position)
+		if toLocal.Magnitude > 0.001 then
+			aimingAtYou = root.CFrame.LookVector:Dot(toLocal.Unit) >= 0.82
+		end
+	end
+
+	local telemetry = miniHudLabels.utility.targetTelemetry[player] or {}
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local healthRatio = humanoid and humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 1
+	local dangerScore = math.floor(
+		(distanceFactor * 35)
+		+ ((visible and 1 or 0) * 25)
+		+ ((heldTool and 1 or 0) * 20)
+		+ ((aimingAtYou and 1 or 0) * 15)
+		+ (nearbyThreats * 5)
+		+ ((1 - healthRatio) * 10)
+	)
+
+	telemetry.visible = visible
+	telemetry.weapon = heldTool
+	telemetry.movementState = getMovementState(character, root)
+	telemetry.aimingAtYou = aimingAtYou
+	telemetry.groupDanger = nearbyThreats
+	telemetry.dangerScore = dangerScore
+	miniHudLabels.utility.targetTelemetry[player] = telemetry
+	return telemetry
+end
+
+local function exportConfigString()
+	local payload = {
+		currentPresetIndex = currentPresetIndex,
+		placeId = game.PlaceId,
+		settings = {},
+	}
+
+	for _, key in ipairs(SETTING_KEYS) do
+		payload.settings[key] = CONFIG[key]
+	end
+
+	return HttpService:JSONEncode(payload)
+end
+
+local function applyImportedConfig(payload)
+	if type(payload) ~= "table" or type(payload.settings) ~= "table" then
+		return false
+	end
+
+	for _, key in ipairs(SETTING_KEYS) do
+		if payload.settings[key] ~= nil then
+			CONFIG[key] = payload.settings[key]
+		end
+	end
+
+	if payload.currentPresetIndex and PRESETS[payload.currentPresetIndex] then
+		currentPresetIndex = payload.currentPresetIndex
+	end
+
+	return true
+end
+
+local function resetDisplaySettings()
+	CONFIG.showNames = true
+	CONFIG.showDistance = true
+	CONFIG.distanceFade = true
+	CONFIG.showHealth = true
+	CONFIG.showWeapon = true
+	CONFIG.showSkeleton = false
+	CONFIG.showHeadDot = false
+	CONFIG.headDotSize = 6
+	CONFIG.showFocusTarget = true
+	CONFIG.showBoxes = true
+	CONFIG.boxMode = "Highlight"
+	CONFIG.showTargetCard = true
+	CONFIG.targetCardCompact = false
+	CONFIG.textStackMode = "Inline"
+end
+
+local function resetViewSettings()
+	CONFIG.cameraFov = DEFAULT_CAMERA_FOV
+	CONFIG.freeCamSpeed = 72
+	CONFIG.removeZoomLimit = false
+	CONFIG.spectateMode = "Direct"
+	CONFIG.cameraRigPreset = "Mid"
+end
+
+local function resetPerformanceSettings()
+	CONFIG.performanceMode = false
+	CONFIG.simplifyMaterials = false
+	CONFIG.hideTextures = false
+	CONFIG.hideEffects = false
+	CONFIG.disableShadows = false
 end
 
 local function isEnemyCandidate(player)
@@ -1902,7 +2533,7 @@ local function applyCameraFov()
 	end
 end
 
-local function getCharacterRoot(character)
+function getCharacterRoot(character)
 	return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
 end
 
@@ -2073,6 +2704,12 @@ local function clearEntry(entry)
 		entry.tracer.Visible = false
 		entry.tracer:Remove()
 		entry.tracer = nil
+	end
+
+	if entry.tracerBranch then
+		entry.tracerBranch.Visible = false
+		entry.tracerBranch:Remove()
+		entry.tracerBranch = nil
 	end
 
 	if entry.headDot then
@@ -2602,6 +3239,10 @@ local function updateBoxEsp(entry, camera, character, color)
 			return
 		end
 		hideBoxes(entry)
+		local root = getCharacterRoot(character)
+		local localRoot = LOCAL_PLAYER.Character and getCharacterRoot(LOCAL_PLAYER.Character)
+		local distance = (root and localRoot) and (root.Position - localRoot.Position).Magnitude or CONFIG.maxDistance
+		box.Thickness = math.clamp(2.6 - ((distance / math.max(CONFIG.maxDistance, 1)) * 1.4), 1, 2.6)
 		box.Visible = true
 		box.Color = color
 		box.Position = Vector2.new(minX, minY)
@@ -2635,6 +3276,10 @@ local function updateBoxEsp(entry, camera, character, color)
 			local segment = segments[index]
 			line.Visible = true
 			line.Color = color
+			local root = getCharacterRoot(character)
+			local localRoot = LOCAL_PLAYER.Character and getCharacterRoot(LOCAL_PLAYER.Character)
+			local distance = (root and localRoot) and (root.Position - localRoot.Position).Magnitude or CONFIG.maxDistance
+			line.Thickness = math.clamp(2.8 - ((distance / math.max(CONFIG.maxDistance, 1)) * 1.5), 1, 2.8)
 			line.From = segment[1]
 			line.To = segment[2]
 		end
@@ -2652,6 +3297,13 @@ local function updateSkeletonEsp(entry, camera, character, color)
 		hideSkeleton(entry)
 		return
 	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local healthRatio = humanoid and humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 1
+	local skeletonColor = CONFIG.showHealth and Color3.fromRGB(
+		math.floor(255 - (155 * healthRatio)),
+		math.floor(70 + (185 * healthRatio)),
+		math.floor(88 - (32 * healthRatio))
+	) or color
 	for index, connection in ipairs(SKELETON_CONNECTIONS) do
 		local fromPart = character:FindFirstChild(connection[1])
 		local toPart = character:FindFirstChild(connection[2])
@@ -2662,7 +3314,7 @@ local function updateSkeletonEsp(entry, camera, character, color)
 			local toPoint = camera:WorldToViewportPoint(toPart.Position)
 			if fromPoint.Z > 0 and toPoint.Z > 0 then
 				line.Visible = true
-				line.Color = color
+				line.Color = skeletonColor
 				line.From = Vector2.new(fromPoint.X, fromPoint.Y)
 				line.To = Vector2.new(toPoint.X, toPoint.Y)
 			else
@@ -2844,6 +3496,7 @@ local function updatePlayerEsp(player)
 	local focusTarget = isFocusedTarget(player)
 	local showDevTag = isDevPlayer(player) and distance <= DEV_TAG_DISTANCE
 	local devRainbowColor = showDevTag and getRainbowColor() or nil
+	local telemetry = getTargetThreatData(player, character, root, localRoot, visible)
 	local tracerColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player)))
 	local camera = getCamera()
 	local effectiveBoxMode = getEffectiveBoxMode()
@@ -2894,7 +3547,8 @@ local function updatePlayerEsp(player)
 			end
 		end
 
-		title.Text = focusTarget and ("[TARGET] " .. table.concat(labelParts, " ")) or table.concat(labelParts, " ")
+		local labelText = table.concat(labelParts, CONFIG.textStackMode == "Stacked" and "\n" or " ")
+		title.Text = focusTarget and ("[TARGET] " .. labelText) or labelText
 		if showDevTag then
 			title.TextColor3 = devRainbowColor
 			title.TextTransparency = 0
@@ -2904,6 +3558,7 @@ local function updatePlayerEsp(player)
 			title.TextTransparency = math.clamp((1 - distanceFade) * 0.65, 0, 0.65)
 			hideDevAura(entry)
 		end
+		entry.billboard.Size = CONFIG.textStackMode == "Stacked" and UDim2.new(0, 180, 0, 42) or UDim2.new(0, 180, 0, 30)
 
 		if entry.healthBack and entry.healthFill and humanoid then
 			local healthPercent = 0
@@ -2947,15 +3602,41 @@ local function updatePlayerEsp(player)
 		if visible and tracerOrigin then
 			tracer.Visible = true
 			tracer.Color = tracerColor
-			tracer.Thickness = CONFIG.tracerThickness
+			tracer.Thickness = math.clamp(CONFIG.tracerThickness + (focusTarget and 0.6 or 0) - ((distance / math.max(CONFIG.maxDistance, 1)) * 0.9), 1, 4)
 			tracer.Transparency = math.clamp((CONFIG.tracerTransparency / 100) * distanceFade, 0.1, 1)
-			tracer.From = tracerOrigin
-			tracer.To = Vector2.new(screenPoint.X, screenPoint.Y)
+			if CONFIG.tracerStyle == "Split" then
+				local midPoint = Vector2.new((tracerOrigin.X + screenPoint.X) * 0.5, tracerOrigin.Y + ((screenPoint.Y - tracerOrigin.Y) * 0.2))
+				tracer.From = tracerOrigin
+				tracer.To = midPoint
+				if not entry.tracerBranch then
+					entry.tracerBranch = createDrawing("Line")
+				end
+				if entry.tracerBranch then
+					entry.tracerBranch.Visible = true
+					entry.tracerBranch.Color = tracerColor
+					entry.tracerBranch.Thickness = tracer.Thickness
+					entry.tracerBranch.Transparency = tracer.Transparency
+					entry.tracerBranch.From = midPoint
+					entry.tracerBranch.To = Vector2.new(screenPoint.X, screenPoint.Y)
+				end
+			else
+				tracer.From = tracerOrigin
+				tracer.To = Vector2.new(screenPoint.X, screenPoint.Y)
+				if entry.tracerBranch then
+					entry.tracerBranch.Visible = false
+				end
+			end
 		else
 			tracer.Visible = false
+			if entry.tracerBranch then
+				entry.tracerBranch.Visible = false
+			end
 		end
 	elseif entry.tracer then
 		entry.tracer.Visible = false
+		if entry.tracerBranch then
+			entry.tracerBranch.Visible = false
+		end
 	end
 
 	if CONFIG.showHeadDot and camera then
@@ -2964,7 +3645,7 @@ local function updatePlayerEsp(player)
 		if head and headDot then
 			local headPoint, headVisible = camera:WorldToViewportPoint(head.Position)
 			if headVisible and headPoint.Z > 0 then
-				local dotSize = math.floor(4 + (distanceFade * 4))
+				local dotSize = math.max(2, math.floor((CONFIG.headDotSize * 0.55) + (distanceFade * CONFIG.headDotSize * 0.45)))
 				headDot.Visible = true
 				headDot.Color = showDevTag and devRainbowColor or outlineColor
 				headDot.Size = Vector2.new(dotSize, dotSize)
@@ -3007,36 +3688,90 @@ local function updatePerfStatsUi()
 	end
 
 	if tracerSliders.targetInfo then
-		if focusedPlayer then
+		tracerSliders.targetCard.Visible = CONFIG.showTargetCard
+		if focusedPlayer and CONFIG.showTargetCard then
 			local character = focusedPlayer.Character
 			local root = character and getCharacterRoot(character)
 			local localCharacter = LOCAL_PLAYER.Character
 			local localRoot = localCharacter and getCharacterRoot(localCharacter)
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			local details = { truncateText(focusedPlayer.Name, 8) }
+			local details = {}
+			local detailsSecondary = {}
+			local telemetry = miniHudLabels.utility.targetTelemetry[focusedPlayer] or {}
 
 			if humanoid then
-				table.insert(details, string.format("%dHP", math.max(0, math.floor(humanoid.Health))))
+				table.insert(details, string.format("%d HP", math.max(0, math.floor(humanoid.Health))))
 			end
 
 			if root and localRoot then
-				table.insert(details, string.format("%dm", math.floor((root.Position - localRoot.Position).Magnitude + 0.5)))
+				table.insert(details, string.format("%d m", math.floor((root.Position - localRoot.Position).Magnitude + 0.5)))
 			end
 
 			if character then
 				local heldTool = getHeldToolName(character)
 				if heldTool then
-					table.insert(details, truncateText(heldTool, 8))
+					table.insert(details, truncateText(heldTool, 12))
 				end
 			end
 
-			tracerSliders.targetInfo.Text = truncateText(table.concat(details, " "), 22)
+			if telemetry.visible ~= nil then
+				table.insert(detailsSecondary, telemetry.visible and "Visible" or "Hidden")
+			end
+
+			if telemetry.movementState then
+				table.insert(detailsSecondary, telemetry.movementState)
+			end
+
+			if telemetry.groupDanger then
+				table.insert(detailsSecondary, string.format("Group %d", telemetry.groupDanger))
+			end
+
+			if telemetry.lastDamageAt then
+				table.insert(detailsSecondary, string.format("Hit %.1fs", math.max(0, tick() - telemetry.lastDamageAt)))
+			end
+
+			tracerSliders.targetInfo.Text = truncateText(focusedPlayer.Name, 18)
 			tracerSliders.targetInfo.TextColor3 = THEME.focus
+			if tracerSliders.targetInfoMeta then
+				tracerSliders.targetInfoMeta.Text = #details > 0 and truncateText(table.concat(details, "  |  "), 46) or "Tracked target"
+				tracerSliders.targetInfoMeta.TextColor3 = THEME.muted
+			end
+			if tracerSliders.targetInfoMeta2 then
+				tracerSliders.targetInfoMeta2.Text = #detailsSecondary > 0 and truncateText(table.concat(detailsSecondary, "  |  "), 46) or "Awaiting telemetry"
+				tracerSliders.targetInfoMeta2.TextColor3 = telemetry.aimingAtYou and THEME.focus or THEME.muted
+			end
+			if tracerSliders.targetBadge then
+				tracerSliders.targetBadge.Text = telemetry.aimingAtYou and string.format("AIMING | %d", telemetry.dangerScore or 0) or string.format("DANGER %d", telemetry.dangerScore or 0)
+				tracerSliders.targetBadge.TextColor3 = telemetry.aimingAtYou and THEME.focus or THEME.text
+				tracerSliders.targetBadge.BackgroundColor3 = telemetry.aimingAtYou and Color3.fromRGB(86, 71, 28) or Color3.fromRGB(35, 40, 53)
+			end
+			tracerSliders.targetCard.Size = CONFIG.targetCardCompact and UDim2.new(1, 0, 0, 58) or UDim2.new(1, 0, 0, 76)
+			if tracerSliders.targetInfoMeta2 then
+				tracerSliders.targetInfoMeta2.Visible = not CONFIG.targetCardCompact
+			end
 		else
 			tracerSliders.targetInfo.Text = "NONE"
 			tracerSliders.targetInfo.TextColor3 = THEME.text
+			if tracerSliders.targetInfoMeta then
+				tracerSliders.targetInfoMeta.Text = "No focus target"
+				tracerSliders.targetInfoMeta.TextColor3 = THEME.muted
+			end
+			if tracerSliders.targetInfoMeta2 then
+				tracerSliders.targetInfoMeta2.Text = "--"
+				tracerSliders.targetInfoMeta2.TextColor3 = THEME.muted
+				tracerSliders.targetInfoMeta2.Visible = not CONFIG.targetCardCompact
+			end
+			if tracerSliders.targetBadge then
+				tracerSliders.targetBadge.Text = "NO LOCK"
+				tracerSliders.targetBadge.TextColor3 = THEME.muted
+				tracerSliders.targetBadge.BackgroundColor3 = Color3.fromRGB(35, 40, 53)
+			end
+			if tracerSliders.targetCard then
+				tracerSliders.targetCard.Size = CONFIG.targetCardCompact and UDim2.new(1, 0, 0, 58) or UDim2.new(1, 0, 0, 76)
+			end
 		end
 	end
+
 end
 
 local function refreshAllEsp()
@@ -3058,6 +3793,7 @@ local function refreshAllEsp()
 				local distance = (root.Position - localRoot.Position).Magnitude
 				if distance <= CONFIG.maxDistance then
 					local visible = isPlayerVisible(character, root)
+					local telemetry = getTargetThreatData(player, character, root, localRoot, visible)
 					local mode = CONFIG.threatMode
 					local threatScore = -math.huge
 
@@ -3074,7 +3810,7 @@ local function refreshAllEsp()
 					elseif mode == "Smart" then
 						local humanoid = character:FindFirstChildOfClass("Humanoid")
 						local healthFactor = humanoid and humanoid.MaxHealth > 0 and (1 - math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)) or 0
-						threatScore = (visible and 120000 or 0) + (getHeldToolName(character) and 60000 or 0) + (healthFactor * 20000) - distance
+						threatScore = (visible and 120000 or 0) + (telemetry.weapon and 60000 or 0) + (healthFactor * 20000) + ((telemetry.aimingAtYou and 1 or 0) * 35000) + (telemetry.groupDanger * 4000) - distance
 					end
 
 					if threatScore > focusedScore then
@@ -3103,12 +3839,29 @@ local function refreshAllEsp()
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player ~= LOCAL_PLAYER then
 			pcall(function()
+				local character = player.Character
+				local root = character and getCharacterRoot(character)
+				local localCharacter = LOCAL_PLAYER.Character
+				local localRoot = localCharacter and getCharacterRoot(localCharacter)
+				local distance = (root and localRoot) and (root.Position - localRoot.Position).Magnitude or 0
+				if distance > (CONFIG.maxDistance * 0.7) and math.floor(tick() * 4) % 2 == 1 then
+					return
+				end
 				updatePlayerEsp(player)
 			end)
 		end
 	end
 
 	lastRefreshMs = (os.clock() - refreshStart) * 1000
+	if currentFps > 0 then
+		if currentFps < 35 then
+			updateInterval = 1 / 16
+		elseif trackedEnemyCount > 12 then
+			updateInterval = 1 / 24
+		else
+			updateInterval = 1 / 30
+		end
+	end
 	updatePerfStatsUi()
 
 end
@@ -3121,8 +3874,43 @@ local function clearAllEsp()
 end
 
 local function hookCharacter(player)
+	local function attachCharacterSignals(character)
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if not humanoid then
+			return
+		end
+
+		miniHudLabels.utility.lastHealth[player] = humanoid.Health
+
+		humanoid.HealthChanged:Connect(function(health)
+			local previousHealth = miniHudLabels.utility.lastHealth[player] or health
+			if health < previousHealth then
+				miniHudLabels.utility.targetTelemetry[player] = miniHudLabels.utility.targetTelemetry[player] or {}
+				miniHudLabels.utility.targetTelemetry[player].lastDamageAt = tick()
+				miniHudLabels.utility.targetTelemetry[player].lastHealthDelta = previousHealth - health
+			end
+			miniHudLabels.utility.lastHealth[player] = health
+		end)
+
+		humanoid.Died:Connect(function()
+			local killer = "Unknown"
+			local creator = humanoid:FindFirstChild("creator")
+			if creator and creator.Value and creator.Value:IsA("Player") then
+				killer = creator.Value.Name
+			end
+
+			local localKill = killer == LOCAL_PLAYER.Name
+			miniHudLabels.utility.killCredit[player] = nil
+
+			if localKill then
+				miniHudLabels.utility.showKillText(string.format("You killed %s", player.Name))
+			end
+		end)
+	end
+
 	player.CharacterAdded:Connect(function()
 		task.wait(0.2)
+		attachCharacterSignals(player.Character)
 		refreshAllEsp()
 	end)
 
@@ -3130,6 +3918,10 @@ local function hookCharacter(player)
 		task.wait(0.1)
 		refreshAllEsp()
 	end)
+
+	if player.Character then
+		attachCharacterSignals(player.Character)
+	end
 end
 
 local function bindToggle(button, configKey)
@@ -3166,6 +3958,8 @@ local function bindToggle(button, configKey)
 			end
 		elseif configKey == "removeZoomLimit" then
 			applyZoomLimitSetting()
+		elseif configKey == "antiAfk" then
+			miniHudLabels.utility.applyAntiAfk()
 		end
 
 		refreshAllEsp()
@@ -3276,6 +4070,7 @@ local function playIntroAnimation()
 	syncUiFromConfig()
 	applyCameraFov()
 	applyZoomLimitSetting()
+	miniHudLabels.utility.applyAntiAfk()
 	applyPerformanceSettings()
 	applyCompactMode(CONFIG.compactMode)
 	setActiveTab("control")
@@ -3314,13 +4109,17 @@ bindToggle(displayToggles.skeleton, "showSkeleton")
 bindToggle(displayToggles.headDot, "showHeadDot")
 bindToggle(displayToggles.focus, "showFocusTarget")
 bindToggle(displayToggles.boxes, "showBoxes")
-bindToggle(visibilityToggle, "visibilityCheck")
-bindToggle(tracersToggle, "showTracers")
+bindToggle(displayToggles.targetCard, "showTargetCard")
+bindToggle(displayToggles.targetCardCompact, "targetCardCompact")
+bindToggle(tracerSliders.visibilityToggle, "visibilityCheck")
+bindToggle(tracerSliders.tracersToggle, "showTracers")
 bindToggle(tracerSliders.focusLock, "focusLock")
-bindToggle(lookDirectionToggle, "showLookDirection")
-bindToggle(crosshairToggle, "showCrosshair")
+bindToggle(tracerSliders.lookDirectionToggle, "showLookDirection")
+bindToggle(tracerSliders.crosshairToggle, "showCrosshair")
 bindToggle(miniHudToggle, "showMiniHud")
 bindToggle(viewButtons.removeZoomLimit, "removeZoomLimit")
+bindToggle(miniHudLabels.utility.antiAfk, "antiAfk")
+bindToggle(miniHudLabels.utility.autoLoadGamePreset, "autoLoadGamePreset")
 bindToggle(performanceToggles.mode, "performanceMode")
 bindToggle(performanceToggles.materials, "simplifyMaterials")
 bindToggle(performanceToggles.textures, "hideTextures")
@@ -3343,34 +4142,41 @@ syncUiFromConfig = function()
 	setToggleState(displayToggles.weapon, CONFIG.showWeapon)
 	setToggleState(displayToggles.skeleton, CONFIG.showSkeleton)
 	setToggleState(displayToggles.headDot, CONFIG.showHeadDot)
+	setSliderState(displayToggles.headDotSize, CONFIG.headDotSize)
 	setToggleState(displayToggles.focus, CONFIG.showFocusTarget)
 	setToggleState(displayToggles.boxes, CONFIG.showBoxes)
+	setToggleState(displayToggles.targetCard, CONFIG.showTargetCard)
+	setToggleState(displayToggles.targetCardCompact, CONFIG.targetCardCompact)
+	displayToggles.textStack.Text = CONFIG.textStackMode
 	tracerSliders.threatMode.Text = CONFIG.threatMode
-	setToggleState(visibilityToggle, CONFIG.visibilityCheck)
-	setToggleState(tracersToggle, CONFIG.showTracers)
+	setToggleState(tracerSliders.visibilityToggle, CONFIG.visibilityCheck)
+	setToggleState(tracerSliders.tracersToggle, CONFIG.showTracers)
 	setToggleState(tracerSliders.focusLock, CONFIG.focusLock)
-	tracerOriginButton.Text = CONFIG.tracerOriginMode
+	tracerSliders.tracerOriginButton.Text = CONFIG.tracerOriginMode
+	tracerSliders.style.Text = CONFIG.tracerStyle
 	setSliderState(tracerSliders.thickness, CONFIG.tracerThickness)
 	setSliderState(tracerSliders.transparency, CONFIG.tracerTransparency)
 	setSliderState(tracerSliders.maxDistance, CONFIG.maxDistance)
 	setSliderState(tracerSliders.fovThickness, CONFIG.fovCircleThickness)
 	setSliderState(tracerSliders.fovTransparency, CONFIG.fovCircleTransparency)
-	setToggleState(lookDirectionToggle, CONFIG.showLookDirection)
-	setToggleState(crosshairToggle, CONFIG.showCrosshair)
+	setToggleState(tracerSliders.lookDirectionToggle, CONFIG.showLookDirection)
+	setToggleState(tracerSliders.crosshairToggle, CONFIG.showCrosshair)
 	setToggleState(miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(viewButtons.removeZoomLimit, CONFIG.removeZoomLimit)
+	setToggleState(miniHudLabels.utility.antiAfk, CONFIG.antiAfk)
+	setToggleState(miniHudLabels.utility.autoLoadGamePreset, CONFIG.autoLoadGamePreset)
 	setToggleState(performanceToggles.mode, CONFIG.performanceMode)
 	setToggleState(performanceToggles.materials, CONFIG.simplifyMaterials)
 	setToggleState(performanceToggles.textures, CONFIG.hideTextures)
 	setToggleState(performanceToggles.effects, CONFIG.hideEffects)
 	setToggleState(performanceToggles.shadows, CONFIG.disableShadows)
 	setToggleState(compactToggle, CONFIG.compactMode)
-	setSliderState(fovCircleSlider, CONFIG.fovRadius)
+	setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
 	setSliderState(cameraFovSlider, CONFIG.cameraFov)
-	crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
+	tracerSliders.crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
 	setOptionButtonsState(crosshairColorButtons, CONFIG.crosshairColor)
 	setSliderState(tracerSliders.crosshairThickness, CONFIG.crosshairThickness)
-	setSliderState(crosshairSizeSlider, CONFIG.crosshairSize)
+	setSliderState(tracerSliders.crosshairSizeSlider, CONFIG.crosshairSize)
 	setSliderState(tracerSliders.crosshairGap, CONFIG.crosshairGap)
 	displayToggles.boxMode.Text = getEffectiveBoxMode()
 	presetButton.Text = PRESETS[currentPresetIndex].name
@@ -3383,6 +4189,7 @@ presetButton.MouseButton1Click:Connect(function()
 	currentPresetIndex = currentPresetIndex % #PRESETS + 1
 	PRESETS[currentPresetIndex].apply()
 	syncUiFromConfig()
+	applyPerformanceSettings()
 	refreshAllEsp()
 	saveSettings()
 end)
@@ -3392,6 +4199,16 @@ displayToggles.boxMode.MouseButton1Click:Connect(function()
 	currentIndex = currentIndex % #BOX_MODE_OPTIONS + 1
 	CONFIG.boxMode = BOX_MODE_OPTIONS[currentIndex]
 	displayToggles.boxMode.Text = CONFIG.boxMode
+	refreshAllEsp()
+	saveSettings()
+end)
+
+displayToggles.textStack.MouseButton1Click:Connect(function()
+	local options = { "Inline", "Stacked" }
+	local currentIndex = table.find(options, CONFIG.textStackMode) or 1
+	currentIndex = currentIndex % #options + 1
+	CONFIG.textStackMode = options[currentIndex]
+	displayToggles.textStack.Text = CONFIG.textStackMode
 	refreshAllEsp()
 	saveSettings()
 end)
@@ -3407,14 +4224,25 @@ tracerSliders.threatMode.MouseButton1Click:Connect(function()
 	showToast("Setting Updated", string.format("Threat Mode set to %s", CONFIG.threatMode), THEME.accent)
 end)
 
-tracerOriginButton.MouseButton1Click:Connect(function()
+tracerSliders.tracerOriginButton.MouseButton1Click:Connect(function()
 	local currentIndex = table.find(TRACER_ORIGIN_OPTIONS, CONFIG.tracerOriginMode) or 1
 	currentIndex = currentIndex % #TRACER_ORIGIN_OPTIONS + 1
 	CONFIG.tracerOriginMode = TRACER_ORIGIN_OPTIONS[currentIndex]
-	tracerOriginButton.Text = CONFIG.tracerOriginMode
+	tracerSliders.tracerOriginButton.Text = CONFIG.tracerOriginMode
 	refreshAllEsp()
 	saveSettings()
 	showToast("Setting Updated", string.format("Tracer Origin set to %s", CONFIG.tracerOriginMode), THEME.accent)
+end)
+
+tracerSliders.style.MouseButton1Click:Connect(function()
+	local options = { "Direct", "Split" }
+	local currentIndex = table.find(options, CONFIG.tracerStyle) or 1
+	currentIndex = currentIndex % #options + 1
+	CONFIG.tracerStyle = options[currentIndex]
+	tracerSliders.style.Text = CONFIG.tracerStyle
+	saveSettings()
+	refreshAllEsp()
+	showToast("Setting Updated", string.format("Tracer Style set to %s", CONFIG.tracerStyle), THEME.accent)
 end)
 
 cameraFovSlider.reset.MouseButton1Click:Connect(function()
@@ -3425,19 +4253,19 @@ cameraFovSlider.reset.MouseButton1Click:Connect(function()
 	showToast("Camera FOV Reset", string.format("Camera %d", CONFIG.cameraFov), THEME.accent)
 end)
 
-fovCircleSlider.reset.MouseButton1Click:Connect(function()
+tracerSliders.fovCircleSlider.reset.MouseButton1Click:Connect(function()
 	CONFIG.fovRadius = DEFAULT_FOV_RADIUS
-	setSliderState(fovCircleSlider, CONFIG.fovRadius)
+	setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
 	updateCrosshair()
 	saveSettings()
 	showToast("FOV Circle Reset", string.format("Circle %d", CONFIG.fovRadius), THEME.accent)
 end)
 
-crosshairStyleButton.MouseButton1Click:Connect(function()
+tracerSliders.crosshairStyleButton.MouseButton1Click:Connect(function()
 	local currentIndex = table.find(CROSSHAIR_OPTIONS, CONFIG.crosshairStyle) or 1
 	currentIndex = currentIndex % #CROSSHAIR_OPTIONS + 1
 	CONFIG.crosshairStyle = CROSSHAIR_OPTIONS[currentIndex]
-	crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
+	tracerSliders.crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
 	updateCrosshair()
 	saveSettings()
 	showToast("Setting Updated", string.format("Crosshair Style set to %s", CONFIG.crosshairStyle), THEME.accent)
@@ -3591,9 +4419,9 @@ viewButtons.reset.MouseButton1Click:Connect(function()
 	UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 	setLocalMovementSuppressed(false)
 	restoreLocalCamera()
+	resetViewSettings()
 	updateViewUi()
 	updateMouseIconVisibility()
-	CONFIG.freeCamSpeed = 72
 	setSliderState(viewButtons.speed, CONFIG.freeCamSpeed)
 	saveSettings()
 	showToast("View Reset", string.format("Freecam speed %d", CONFIG.freeCamSpeed), THEME.accent)
@@ -3622,7 +4450,7 @@ do
 	local draggingCrosshairSize = false
 
 	local function updateCrosshairSizeFromX(positionX)
-		local bar = crosshairSizeSlider.bar
+		local bar = tracerSliders.crosshairSizeSlider.bar
 		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
 		local alpha = 0
 		if bar.AbsoluteSize.X > 0 then
@@ -3633,8 +4461,8 @@ do
 		local nearestDistance = math.huge
 		for _, option in ipairs(CROSSHAIR_SIZE_OPTIONS) do
 			local optionAlpha = 0
-			if crosshairSizeSlider.max > crosshairSizeSlider.min then
-				optionAlpha = (option - crosshairSizeSlider.min) / (crosshairSizeSlider.max - crosshairSizeSlider.min)
+			if tracerSliders.crosshairSizeSlider.max > tracerSliders.crosshairSizeSlider.min then
+				optionAlpha = (option - tracerSliders.crosshairSizeSlider.min) / (tracerSliders.crosshairSizeSlider.max - tracerSliders.crosshairSizeSlider.min)
 			end
 			local distance = math.abs(alpha - optionAlpha)
 			if distance < nearestDistance then
@@ -3650,17 +4478,17 @@ do
 			showToast("Setting Updated", string.format("Crosshair Size set to %d", CONFIG.crosshairSize), THEME.accent)
 		end
 
-		setSliderState(crosshairSizeSlider, CONFIG.crosshairSize)
+		setSliderState(tracerSliders.crosshairSizeSlider, CONFIG.crosshairSize)
 	end
 
-	crosshairSizeSlider.bar.InputBegan:Connect(function(input)
+	tracerSliders.crosshairSizeSlider.bar.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingCrosshairSize = true
 			updateCrosshairSizeFromX(input.Position.X)
 		end
 	end)
 
-	crosshairSizeSlider.bar.InputEnded:Connect(function(input)
+	tracerSliders.crosshairSizeSlider.bar.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingCrosshairSize = false
 		end
@@ -3679,12 +4507,190 @@ do
 	end)
 end
 
-applyButton.MouseButton1Click:Connect(function()
-	setEspEnabled(true)
+do
+	local draggingHeadDotSize = false
+
+	local function updateHeadDotSizeFromX(positionX)
+		local bar = displayToggles.headDotSize.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+
+		local value = math.floor(displayToggles.headDotSize.min + ((displayToggles.headDotSize.max - displayToggles.headDotSize.min) * alpha) + 0.5)
+		value = math.clamp(value, displayToggles.headDotSize.min, displayToggles.headDotSize.max)
+
+		if CONFIG.headDotSize ~= value then
+			CONFIG.headDotSize = value
+			refreshAllEsp()
+			saveSettings()
+			showToast("Setting Updated", string.format("Head Dot Size set to %d", CONFIG.headDotSize), THEME.accent)
+		end
+
+		setSliderState(displayToggles.headDotSize, CONFIG.headDotSize)
+	end
+
+	displayToggles.headDotSize.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingHeadDotSize = true
+			updateHeadDotSizeFromX(input.Position.X)
+		end
+	end)
+
+	displayToggles.headDotSize.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingHeadDotSize = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if draggingHeadDotSize and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateHeadDotSizeFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingHeadDotSize = false
+		end
+	end)
+end
+
+miniHudLabels.utility.rejoin.MouseButton1Click:Connect(function()
+	pcall(function()
+		game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, LOCAL_PLAYER)
+	end)
 end)
 
-killButton.MouseButton1Click:Connect(function()
-	setEspEnabled(false)
+miniHudLabels.utility.hop.MouseButton1Click:Connect(function()
+	local success, response = pcall(function()
+		return HttpService:JSONDecode(game:HttpGet(string.format(
+			"https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+			game.PlaceId
+		)))
+	end)
+
+	if not success or not response or not response.data then
+		showToast("Player Utility", "Server hop failed", THEME.muted)
+		return
+	end
+
+	for _, server in ipairs(response.data) do
+		if server.id ~= game.JobId and server.playing < server.maxPlayers then
+			pcall(function()
+				game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, server.id, LOCAL_PLAYER)
+			end)
+			return
+		end
+	end
+
+	showToast("Player Utility", "No open server found", THEME.muted)
+end)
+
+miniHudLabels.utility.exportConfig.MouseButton1Click:Connect(function()
+	local exportText = exportConfigString()
+	miniHudLabels.utility.importedConfigText = exportText
+	local copied = false
+	if type(setclipboard) == "function" then
+		pcall(function()
+			setclipboard(exportText)
+			copied = true
+		end)
+	end
+	showToast("Settings", copied and "Config copied to clipboard" or "Config cached in session", copied and THEME.accent or THEME.focus)
+end)
+
+miniHudLabels.utility.importConfig.MouseButton1Click:Connect(function()
+	local sourceText = miniHudLabels.utility.importedConfigText
+	if type(getclipboard) == "function" then
+		pcall(function()
+			sourceText = getclipboard()
+		end)
+	end
+
+	if not sourceText or sourceText == "" then
+		showToast("Settings", "No config string available", THEME.muted)
+		return
+	end
+
+	local success, payload = pcall(function()
+		return HttpService:JSONDecode(sourceText)
+	end)
+
+	if not success or not applyImportedConfig(payload) then
+		showToast("Settings", "Config import failed", THEME.muted)
+		return
+	end
+
+	syncUiFromConfig()
+	applyCameraFov()
+	applyZoomLimitSetting()
+	applyPerformanceSettings()
+	refreshAllEsp()
+	saveSettings()
+	showToast("Settings", "Config imported", THEME.accent)
+end)
+
+miniHudLabels.utility.resetDisplay.MouseButton1Click:Connect(function()
+	resetDisplaySettings()
+	syncUiFromConfig()
+	refreshAllEsp()
+	saveSettings()
+	showToast("Settings", "Display settings reset", THEME.accent)
+end)
+
+miniHudLabels.utility.resetView.MouseButton1Click:Connect(function()
+	resetViewSettings()
+	syncUiFromConfig()
+	applyCameraFov()
+	applyZoomLimitSetting()
+	updateViewUi()
+	saveSettings()
+	showToast("Settings", "View settings reset", THEME.accent)
+end)
+
+miniHudLabels.utility.resetPerformance.MouseButton1Click:Connect(function()
+	resetPerformanceSettings()
+	applyPerformanceSettings()
+	syncUiFromConfig()
+	saveSettings()
+	showToast("Settings", "Performance settings reset", THEME.accent)
+end)
+
+miniHudLabels.utility.respawn.MouseButton1Click:Connect(function()
+	local success = pcall(function()
+		LOCAL_PLAYER:LoadCharacter()
+	end)
+
+	if not success then
+		local character = LOCAL_PLAYER.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			pcall(function()
+				humanoid.Health = 0
+			end)
+			pcall(function()
+				humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+			end)
+		elseif character then
+			pcall(function()
+				character:BreakJoints()
+			end)
+		end
+	end
+
+	showToast("Player Utility", "Respawn requested", THEME.accent)
+end)
+
+miniHudLabels.utility.tools.MouseButton1Click:Connect(function()
+	pcall(function()
+		local humanoid = getLocalHumanoid()
+		if humanoid then
+			humanoid:UnequipTools()
+		end
+	end)
+	showToast("Player Utility", "Tools reset", THEME.accent)
 end)
 
 minimizeButton.MouseButton1Click:Connect(function()
@@ -3712,12 +4718,14 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	clearPlayerEsp(player)
 	espObjects[player] = nil
+	miniHudLabels.utility.targetTelemetry[player] = nil
 	if player == viewState.spectateTarget then
 		setSpectateTarget(nil)
 	end
 	if player == viewState.lockedFocusTarget then
 		viewState.lockedFocusTarget = nil
 	end
+	miniHudLabels.utility.killCredit[player] = nil
 end)
 
 for _, player in ipairs(Players:GetPlayers()) do
@@ -3730,15 +4738,15 @@ do
 	local draggingFovCircle = false
 
 	local function updateFovCircleFromX(positionX)
-		local bar = fovCircleSlider.bar
+		local bar = tracerSliders.fovCircleSlider.bar
 		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
 		local alpha = 0
 		if bar.AbsoluteSize.X > 0 then
 			alpha = relative / bar.AbsoluteSize.X
 		end
 
-		local value = math.floor(fovCircleSlider.min + ((fovCircleSlider.max - fovCircleSlider.min) * alpha) + 0.5)
-		value = math.clamp(value, fovCircleSlider.min, fovCircleSlider.max)
+		local value = math.floor(tracerSliders.fovCircleSlider.min + ((tracerSliders.fovCircleSlider.max - tracerSliders.fovCircleSlider.min) * alpha) + 0.5)
+		value = math.clamp(value, tracerSliders.fovCircleSlider.min, tracerSliders.fovCircleSlider.max)
 
 		if CONFIG.fovRadius ~= value then
 			CONFIG.fovRadius = value
@@ -3746,17 +4754,17 @@ do
 			saveSettings()
 		end
 
-		setSliderState(fovCircleSlider, CONFIG.fovRadius)
+		setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
 	end
 
-	fovCircleSlider.bar.InputBegan:Connect(function(input)
+	tracerSliders.fovCircleSlider.bar.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingFovCircle = true
 			updateFovCircleFromX(input.Position.X)
 		end
 	end)
 
-	fovCircleSlider.bar.InputEnded:Connect(function(input)
+	tracerSliders.fovCircleSlider.bar.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingFovCircle = false
 		end
@@ -4065,6 +5073,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
 		hideCrosshair()
 	end
 	updateMouseIconVisibility()
+	updatePerfStatsUi()
 	updateAccumulator = updateAccumulator + deltaTime
 	if updateAccumulator >= updateInterval then
 		updateAccumulator = 0
