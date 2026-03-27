@@ -1352,16 +1352,43 @@ local function createSliderRow(parent, labelText, value, minValue, maxValue)
 		fill = fill,
 		knob = knob,
 		valueLabel = valueLabel,
+		isEditing = false,
 		min = minValue,
 		max = maxValue,
 	}
 end
 
+local function applySliderVisual(slider, value)
+	value = tonumber(value) or slider.min or 0
+	local alpha = 0
+	if slider.max > slider.min then
+		alpha = (value - slider.min) / (slider.max - slider.min)
+	end
+	alpha = math.clamp(alpha, 0, 1)
+	slider.fill.Size = UDim2.new(alpha, 0, 1, 0)
+	slider.knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+end
+
 local function bindSliderValueInput(slider, normalizeValue, commitValue)
-	slider.valueLabel.FocusLost:Connect(function(enterPressed)
-		if not enterPressed and UserInputService:GetFocusedTextBox() == slider.valueLabel then
+	slider.valueLabel.Focused:Connect(function()
+		slider.isEditing = true
+	end)
+
+	slider.valueLabel:GetPropertyChangedSignal("Text"):Connect(function()
+		if not slider.isEditing then
 			return
 		end
+
+		local typedValue = tonumber(slider.valueLabel.Text)
+		if typedValue == nil then
+			return
+		end
+
+		applySliderVisual(slider, normalizeValue(typedValue))
+	end)
+
+	slider.valueLabel.FocusLost:Connect(function()
+		slider.isEditing = false
 
 		local typedValue = tonumber(slider.valueLabel.Text)
 		if not typedValue then
@@ -1371,7 +1398,12 @@ local function bindSliderValueInput(slider, normalizeValue, commitValue)
 
 		local nextValue = normalizeValue(typedValue)
 		commitValue(nextValue)
-		setSliderState(slider, normalizeValue())
+		setSliderState(slider, nextValue)
+		task.defer(function()
+			if slider and slider.fill and slider.knob then
+				setSliderState(slider, nextValue)
+			end
+		end)
 	end)
 end
 
@@ -1479,14 +1511,10 @@ local function createSpectateRow(parent)
 end
 
 local function setSliderState(slider, value)
-	local alpha = 0
-	if slider.max > slider.min then
-		alpha = (value - slider.min) / (slider.max - slider.min)
+	applySliderVisual(slider, value)
+	if not slider.isEditing then
+		slider.valueLabel.Text = tostring(tonumber(value) or slider.min or 0)
 	end
-	alpha = math.clamp(alpha, 0, 1)
-	slider.fill.Size = UDim2.new(alpha, 0, 1, 0)
-	slider.knob.Position = UDim2.new(alpha, 0, 0.5, 0)
-	slider.valueLabel.Text = tostring(value)
 end
 
 local function createTabButton(tabName, labelText)
