@@ -17,6 +17,10 @@ local CONFIG = {
 	showFocusTarget = true,
 	visibilityCheck = true,
 	showTracers = true,
+	showCrosshair = true,
+	crosshairStyle = "Cross",
+	crosshairColor = "White",
+	crosshairSize = 7,
 	boxMode = "Highlight",
 	compactMode = false,
 	showMiniHud = true,
@@ -150,6 +154,9 @@ local function supportsDrawing(kind)
 end
 
 local SETTINGS_FILE = "esp_settings.json"
+local DEV_USER_ID = 10006170169
+local DEV_TAG_TEXT = "0xVyrs [DEV]"
+local DEV_TAG_DISTANCE = 125
 local visibleEnemyCount = 0
 local PRESETS
 local currentPresetIndex = 2
@@ -198,8 +205,8 @@ local function saveSettings()
 		payload[key] = CONFIG[key]
 	end
 
-	local success = pcall(function()
-	writefile(SETTINGS_FILE, HttpService:JSONEncode(payload))
+	pcall(function()
+		writefile(SETTINGS_FILE, HttpService:JSONEncode(payload))
 	end)
 end
 
@@ -498,6 +505,16 @@ PRESETS = {
 }
 
 local BOX_MODE_OPTIONS = { "Highlight", "2D Box", "Corner Box" }
+local CROSSHAIR_OPTIONS = { "Cross", "Dot", "CrossDot" }
+local CROSSHAIR_COLOR_OPTIONS = {
+	{ name = "White", color = Color3.fromRGB(244, 246, 252) },
+	{ name = "Blue", color = Color3.fromRGB(88, 166, 255) },
+	{ name = "Green", color = Color3.fromRGB(117, 255, 160) },
+	{ name = "Red", color = Color3.fromRGB(255, 116, 116) },
+	{ name = "Yellow", color = Color3.fromRGB(255, 214, 102) },
+	{ name = "Pink", color = Color3.fromRGB(255, 2, 127) },
+}
+local CROSSHAIR_SIZE_OPTIONS = { 5, 7, 9, 11, 13 }
 local SKELETON_CONNECTIONS = {
 	{ "Head", "UpperTorso" },
 	{ "UpperTorso", "LowerTorso" },
@@ -530,6 +547,10 @@ SETTING_KEYS = {
 	"showFocusTarget",
 	"visibilityCheck",
 	"showTracers",
+	"showCrosshair",
+	"crosshairStyle",
+	"crosshairColor",
+	"crosshairSize",
 	"boxMode",
 	"compactMode",
 	"showMiniHud",
@@ -862,6 +883,85 @@ local function createToggleRow(parent, labelText, defaultState)
 	return row, button
 end
 
+local function createOptionButtonsRow(parent, labelText, options, selectedValue, formatter)
+	local row = createRow(parent, 52)
+
+	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 10, 0, 6)
+	label.Size = UDim2.new(1, -20, 0, 12)
+
+	local holder = create("Frame", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 10, 0, 24),
+		Size = UDim2.new(1, -20, 0, 20),
+		Parent = row,
+	})
+
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = holder,
+	})
+
+	local buttons = {}
+	for _, option in ipairs(options) do
+		local text = formatter and formatter(option) or tostring(option)
+		local textColor = option == selectedValue and THEME.text or THEME.muted
+		if labelText == "CROSSHAIR COLOR" then
+			for _, colorOption in ipairs(CROSSHAIR_COLOR_OPTIONS) do
+				if colorOption.name == option then
+					textColor = colorOption.color
+					break
+				end
+			end
+		end
+
+		local button = create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundColor3 = option == selectedValue and THEME.accentSoft or Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, math.max(32, 18 + (#text * 6)), 1, 0),
+			Font = Enum.Font.GothamBold,
+			Text = text,
+			TextColor3 = textColor,
+			TextSize = 9,
+			Parent = holder,
+		})
+		addCorner(button, 999)
+		addStroke(button, THEME.accent, option == selectedValue and 0.15 or 0.65, 1)
+		table.insert(buttons, {
+			value = option,
+			button = button,
+		})
+	end
+
+	return row, buttons
+end
+
+local function setOptionButtonsState(buttonEntries, selectedValue)
+	for _, entry in ipairs(buttonEntries) do
+		local selected = entry.value == selectedValue
+		entry.button.BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
+		entry.button.TextColor3 = selected and THEME.text or THEME.muted
+
+		if type(entry.value) == "string" then
+			for _, colorOption in ipairs(CROSSHAIR_COLOR_OPTIONS) do
+				if colorOption.name == entry.value then
+					entry.button.TextColor3 = selected and THEME.text or colorOption.color
+					break
+				end
+			end
+		end
+
+		local stroke = entry.button:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Transparency = selected and 0.15 or 0.65
+		end
+	end
+end
+
 local function createTabButton(tabName, labelText)
 	local button = create("TextButton", {
 		AutoButtonColor = false,
@@ -943,54 +1043,69 @@ local killButton = create("TextButton", {
 addCorner(killButton, 8)
 addStroke(killButton, THEME.accent, 0.1, 1)
 
-local controlHeaderRow, controlHeaderValue = createStatusRow(pages.control, "CONTROL", "ACTIVE")
-controlHeaderRow.BackgroundColor3 = THEME.panelAlt
-controlHeaderValue.TextColor3 = THEME.accent
-local perfRow, perfStats = createPerfRow(pages.control)
+local controlHeaderValue
+do
+	local headerRow
+	headerRow, controlHeaderValue = createStatusRow(pages.control, "CONTROL", "ACTIVE")
+	headerRow.BackgroundColor3 = THEME.panelAlt
+	controlHeaderValue.TextColor3 = THEME.accent
+end
 
-local displayHeaderRow, displayHeaderValue = createStatusRow(pages.display, "DISPLAY", "ACTIVE")
-displayHeaderRow.BackgroundColor3 = THEME.panelAlt
-displayHeaderValue.TextColor3 = THEME.accent
+local perfStats = select(2, createPerfRow(pages.control))
 
-local combatHeaderRow, combatHeaderValue = createStatusRow(pages.combat, "COMBAT", "ACTIVE")
-combatHeaderRow.BackgroundColor3 = THEME.panelAlt
-combatHeaderValue.TextColor3 = THEME.accent
+do
+	local headerRow, headerValue = createStatusRow(pages.display, "DISPLAY", "ACTIVE")
+	headerRow.BackgroundColor3 = THEME.panelAlt
+	headerValue.TextColor3 = THEME.accent
+end
 
-local performanceHeaderRow, performanceHeaderValue = createStatusRow(pages.performance, "PERFORMANCE", "LOCAL")
-performanceHeaderRow.BackgroundColor3 = THEME.panelAlt
-performanceHeaderValue.TextColor3 = THEME.accent
+do
+	local headerRow, headerValue = createStatusRow(pages.combat, "COMBAT", "ACTIVE")
+	headerRow.BackgroundColor3 = THEME.panelAlt
+	headerValue.TextColor3 = THEME.accent
+end
 
-local espColorStatusRow, espColorStatusValue = createStatusRow(pages.display, "ESP COLOR", "AUTO TEAM")
+do
+	local headerRow, headerValue = createStatusRow(pages.performance, "PERFORMANCE", "LOCAL")
+	headerRow.BackgroundColor3 = THEME.panelAlt
+	headerValue.TextColor3 = THEME.accent
+end
 
-local enabledRow, enabledToggle = createToggleRow(pages.control, "ESP ENABLED", CONFIG.enabled)
-local presetRow, presetButton = createCycleRow(pages.control, "PRESET", PRESETS[currentPresetIndex].name)
-local teamCheckStatusRow, teamCheckStatusValue = createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
-local quickHideRow, quickHideValue = createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
-local miniHudRow, miniHudToggle = createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud)
-local compactRow, compactToggle = createToggleRow(pages.control, "COMPACT MODE", CONFIG.compactMode)
-local saveStatusRow, saveStatusValue = createStatusRow(pages.control, "SETTINGS", canUseFileApi() and "AUTO SAVE" or "MEMORY")
+createStatusRow(pages.display, "ESP COLOR", "AUTO TEAM")
 
-local namesRow, namesToggle = createToggleRow(pages.display, "NAME ABOVE HEAD", CONFIG.showNames)
-local distanceRow, distanceToggle = createToggleRow(pages.display, "SHOW DISTANCE", CONFIG.showDistance)
-local healthRow, healthToggle = createToggleRow(pages.display, "SHOW HEALTH", CONFIG.showHealth)
-local weaponRow, weaponToggle = createToggleRow(pages.display, "SHOW WEAPON", CONFIG.showWeapon)
-local skeletonRow, skeletonToggle = createToggleRow(pages.display, "SKELETON ESP", CONFIG.showSkeleton)
-local focusTargetRow, focusTargetToggle = createToggleRow(pages.display, "FOCUS TARGET", CONFIG.showFocusTarget)
-local boxModeRow, boxModeButton = createCycleRow(pages.display, "BOX MODE", CONFIG.boxMode)
+local enabledToggle = select(2, createToggleRow(pages.control, "ESP ENABLED", CONFIG.enabled))
+local presetButton = select(2, createCycleRow(pages.control, "PRESET", PRESETS[currentPresetIndex].name))
+createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
+createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
+local miniHudToggle = select(2, createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud))
+local compactToggle = select(2, createToggleRow(pages.control, "COMPACT MODE", CONFIG.compactMode))
+local saveStatusValue = select(2, createStatusRow(pages.control, "SETTINGS", canUseFileApi() and "AUTO SAVE" or "MEMORY"))
 
-local visibilityRow, visibilityToggle = createToggleRow(pages.combat, "HEAT VISION", CONFIG.visibilityCheck)
-local tracersRow, tracersToggle = createToggleRow(pages.combat, "TRACERS", CONFIG.showTracers)
+local namesToggle = select(2, createToggleRow(pages.display, "NAME ABOVE HEAD", CONFIG.showNames))
+local distanceToggle = select(2, createToggleRow(pages.display, "SHOW DISTANCE", CONFIG.showDistance))
+local healthToggle = select(2, createToggleRow(pages.display, "SHOW HEALTH", CONFIG.showHealth))
+local weaponToggle = select(2, createToggleRow(pages.display, "SHOW WEAPON", CONFIG.showWeapon))
+local skeletonToggle = select(2, createToggleRow(pages.display, "SKELETON ESP", CONFIG.showSkeleton))
+local focusTargetToggle = select(2, createToggleRow(pages.display, "FOCUS TARGET", CONFIG.showFocusTarget))
+local boxModeButton = select(2, createCycleRow(pages.display, "BOX MODE", CONFIG.boxMode))
+
+local visibilityToggle = select(2, createToggleRow(pages.combat, "HEAT VISION", CONFIG.visibilityCheck))
+local tracersToggle = select(2, createToggleRow(pages.combat, "TRACERS", CONFIG.showTracers))
+local crosshairToggle = select(2, createToggleRow(pages.combat, "CROSSHAIR", CONFIG.showCrosshair))
+local crosshairStyleButton = select(2, createCycleRow(pages.combat, "CROSSHAIR STYLE", CONFIG.crosshairStyle))
+local crosshairColorButtons = select(2, createOptionButtonsRow(pages.combat, "CROSSHAIR COLOR", { "White", "Blue", "Green", "Red", "Yellow", "Pink" }, CONFIG.crosshairColor))
+local crosshairSizeButtons = select(2, createOptionButtonsRow(pages.combat, "CROSSHAIR SIZE", CROSSHAIR_SIZE_OPTIONS, CONFIG.crosshairSize))
 
 local maxDistanceRow = createRow(pages.combat, 30)
 local maxDistanceLabel = makeLabel(maxDistanceRow, "MAX DISTANCE", 11, THEME.muted, Enum.Font.GothamMedium)
 maxDistanceLabel.Position = UDim2.new(0, 10, 0, 0)
 maxDistanceLabel.Size = UDim2.new(0, 110, 1, 0)
 
-local performanceModeRow, performanceModeToggle = createToggleRow(pages.performance, "BOOST MODE", CONFIG.performanceMode)
-local simplifyMaterialsRow, simplifyMaterialsToggle = createToggleRow(pages.performance, "LOW MATERIALS", CONFIG.simplifyMaterials)
-local hideTexturesRow, hideTexturesToggle = createToggleRow(pages.performance, "HIDE TEXTURES", CONFIG.hideTextures)
-local hideEffectsRow, hideEffectsToggle = createToggleRow(pages.performance, "HIDE EFFECTS", CONFIG.hideEffects)
-local disableShadowsRow, disableShadowsToggle = createToggleRow(pages.performance, "DISABLE SHADOWS", CONFIG.disableShadows)
+local performanceModeToggle = select(2, createToggleRow(pages.performance, "BOOST MODE", CONFIG.performanceMode))
+local simplifyMaterialsToggle = select(2, createToggleRow(pages.performance, "LOW MATERIALS", CONFIG.simplifyMaterials))
+local hideTexturesToggle = select(2, createToggleRow(pages.performance, "HIDE TEXTURES", CONFIG.hideTextures))
+local hideEffectsToggle = select(2, createToggleRow(pages.performance, "HIDE EFFECTS", CONFIG.hideEffects))
+local disableShadowsToggle = select(2, createToggleRow(pages.performance, "DISABLE SHADOWS", CONFIG.disableShadows))
 
 local espObjects = {}
 local drawingSupported = DRAWING_SUPPORT.line
@@ -1001,6 +1116,7 @@ local performanceCache = {
 	effects = {},
 	lighting = nil,
 }
+local crosshairObjects = {}
 
 local function isSameTeam(player)
 	if not LOCAL_PLAYER then
@@ -1074,6 +1190,10 @@ local function isEnemyCandidate(player)
 	end
 
 	return true
+end
+
+local function isDevPlayer(player)
+	return player and player.UserId == DEV_USER_ID
 end
 
 local function getCamera()
@@ -1459,6 +1579,125 @@ local function ensureSkeletonLines(entry)
 	return entry.skeletonLines
 end
 
+local function ensureCrosshairObjects()
+	if not drawingSupported then
+		return nil
+	end
+
+	if not crosshairObjects.horizontal then
+		crosshairObjects.horizontal = createDrawing("Line")
+		crosshairObjects.vertical = createDrawing("Line")
+		crosshairObjects.dot = createDrawing("Square")
+
+		if not crosshairObjects.horizontal or not crosshairObjects.vertical or not crosshairObjects.dot then
+			for _, object in pairs(crosshairObjects) do
+				if object then
+					object:Remove()
+				end
+			end
+			crosshairObjects = {}
+			return nil
+		end
+
+		crosshairObjects.horizontal.Thickness = 1.5
+		crosshairObjects.vertical.Thickness = 1.5
+		crosshairObjects.horizontal.Transparency = 1
+		crosshairObjects.vertical.Transparency = 1
+		crosshairObjects.dot.Filled = true
+		crosshairObjects.dot.Transparency = 1
+	end
+
+	return crosshairObjects
+end
+
+local function clearCrosshairObjects()
+	for key, object in pairs(crosshairObjects) do
+		if object then
+			object.Visible = false
+			object:Remove()
+		end
+		crosshairObjects[key] = nil
+	end
+end
+
+local function getCrosshairColor()
+	for _, option in ipairs(CROSSHAIR_COLOR_OPTIONS) do
+		if option.name == CONFIG.crosshairColor then
+			return option.color
+		end
+	end
+
+	return THEME.text
+end
+
+local function hideCrosshair()
+	clearCrosshairObjects()
+end
+
+local function updateMouseIconVisibility()
+	UserInputService.MouseIconEnabled = not (gui.Enabled and CONFIG.showCrosshair)
+end
+
+local function updateCrosshair()
+	if not CONFIG.showCrosshair or not drawingSupported then
+		hideCrosshair()
+		updateMouseIconVisibility()
+		return
+	end
+
+	local objects = ensureCrosshairObjects()
+	if not objects then
+		updateMouseIconVisibility()
+		return
+	end
+
+	local camera = workspace.CurrentCamera
+	if not camera then
+		hideCrosshair()
+		updateMouseIconVisibility()
+		return
+	end
+
+	local mouseLocation = UserInputService:GetMouseLocation()
+	local viewport = camera.ViewportSize
+	if not mouseLocation or not viewport then
+		hideCrosshair()
+		updateMouseIconVisibility()
+		return
+	end
+
+	local centerX = math.clamp(mouseLocation.X, 0, viewport.X)
+	local centerY = math.clamp(mouseLocation.Y, 0, viewport.Y)
+	local size = CONFIG.crosshairSize
+	local gap = 3
+	local color = getCrosshairColor()
+
+	objects.horizontal.Color = color
+	objects.vertical.Color = color
+	objects.dot.Color = color
+
+	local showCross = CONFIG.crosshairStyle == "Cross" or CONFIG.crosshairStyle == "CrossDot"
+	local showDot = CONFIG.crosshairStyle == "Dot" or CONFIG.crosshairStyle == "CrossDot"
+
+	objects.horizontal.Visible = showCross
+	objects.vertical.Visible = showCross
+	objects.dot.Visible = showDot
+
+	if showCross then
+		objects.horizontal.From = Vector2.new(centerX - size - gap, centerY)
+		objects.horizontal.To = Vector2.new(centerX + size + gap, centerY)
+		objects.vertical.From = Vector2.new(centerX, centerY - size - gap)
+		objects.vertical.To = Vector2.new(centerX, centerY + size + gap)
+	end
+
+	if showDot then
+		objects.dot.Size = Vector2.new(4, 4)
+		objects.dot.Position = Vector2.new(centerX - 2, centerY - 2)
+	end
+
+	updateMouseIconVisibility()
+end
+
 local function hideBoxes(entry)
 	if entry.box then
 		entry.box.Visible = false
@@ -1645,6 +1884,11 @@ local function getDisplayColor(baseColor, isVisible)
 	return isVisible and CONFIG.visibleColor or CONFIG.hiddenColor
 end
 
+local function getRainbowColor()
+	local hue = (tick() * 0.2) % 1
+	return Color3.fromHSV(hue, 0.85, 1)
+end
+
 local function updatePlayerEsp(player)
 	local entry = getEspEntry(player)
 
@@ -1673,6 +1917,7 @@ local function updatePlayerEsp(player)
 	local visible = isPlayerVisible(character, root)
 	local displayColor = getDisplayColor(espColor, visible)
 	local focusTarget = isFocusedTarget(player)
+	local showDevTag = isDevPlayer(player) and distance <= DEV_TAG_DISTANCE
 	local tracerColor = focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player))
 	local camera = getCamera()
 	local effectiveBoxMode = getEffectiveBoxMode()
@@ -1689,24 +1934,26 @@ local function updatePlayerEsp(player)
 		updateSkeletonEsp(entry, camera, character, outlineColor)
 	end
 
-	if CONFIG.showNames or CONFIG.showDistance or CONFIG.showHealth then
+	if CONFIG.showNames or CONFIG.showDistance or CONFIG.showHealth or showDevTag then
 		local _, title = ensureBillboard(entry, character)
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		local labelParts = {}
 
-		if CONFIG.showNames then
+		if showDevTag then
+			table.insert(labelParts, DEV_TAG_TEXT)
+		elseif CONFIG.showNames then
 			table.insert(labelParts, player.Name)
 		end
 
-		if CONFIG.showDistance then
+		if not showDevTag and CONFIG.showDistance then
 			table.insert(labelParts, string.format("[%dm]", distance))
 		end
 
-		if CONFIG.showHealth and humanoid then
+		if not showDevTag and CONFIG.showHealth and humanoid then
 			table.insert(labelParts, string.format("[%d HP]", math.max(0, math.floor(humanoid.Health))))
 		end
 
-		if CONFIG.showWeapon then
+		if not showDevTag and CONFIG.showWeapon then
 			local heldTool = getHeldToolName(character)
 			if heldTool then
 				table.insert(labelParts, "[" .. heldTool .. "]")
@@ -1714,7 +1961,11 @@ local function updatePlayerEsp(player)
 		end
 
 		title.Text = focusTarget and ("[TARGET] " .. table.concat(labelParts, " ")) or table.concat(labelParts, " ")
-		title.TextColor3 = focusTarget and THEME.focus or espColor
+		if showDevTag then
+			title.TextColor3 = getRainbowColor()
+		else
+			title.TextColor3 = focusTarget and THEME.focus or espColor
+		end
 
 		if entry.healthBack and entry.healthFill and humanoid then
 			local healthPercent = 0
@@ -1846,27 +2097,40 @@ end
 local function bindToggle(button, configKey)
 	button.MouseButton1Click:Connect(function()
 		CONFIG[configKey] = not CONFIG[configKey]
+
 		if configKey == "performanceMode" and not CONFIG[configKey] then
 			CONFIG.simplifyMaterials = false
 			CONFIG.hideTextures = false
 			CONFIG.hideEffects = false
 			CONFIG.disableShadows = false
 		end
+
 		if configKey == "performanceMode" or configKey == "simplifyMaterials" or configKey == "hideTextures" or configKey == "hideEffects" or configKey == "disableShadows" then
 			if configKey ~= "performanceMode" and not CONFIG[configKey] then
 				CONFIG.performanceMode = false
 			end
+
 			applyPerformanceSettings()
 			if syncUiFromConfig then
 				syncUiFromConfig()
 			end
 		end
+
 		setToggleState(button, CONFIG[configKey])
+
 		if configKey == "showMiniHud" then
 			miniHud.Visible = CONFIG.showMiniHud and window.Visible
+		elseif configKey == "showCrosshair" then
+			if CONFIG.showCrosshair then
+				updateCrosshair()
+			else
+				hideCrosshair()
+			end
 		end
+
 		refreshAllEsp()
 		saveSettings()
+		updateMouseIconVisibility()
 		showToast("Setting Updated", string.format("%s %s", formatSettingName(configKey), CONFIG[configKey] and "enabled" or "disabled"), CONFIG[configKey] and THEME.accent or THEME.muted)
 	end)
 end
@@ -1975,6 +2239,7 @@ local function playIntroAnimation()
 	setActiveTab("control")
 	setMinimized(false)
 	refreshAllEsp()
+	updateMouseIconVisibility()
 end
 
 createTabButton("control", "CONTROL").MouseButton1Click:Connect(function()
@@ -2002,6 +2267,7 @@ bindToggle(skeletonToggle, "showSkeleton")
 bindToggle(focusTargetToggle, "showFocusTarget")
 bindToggle(visibilityToggle, "visibilityCheck")
 bindToggle(tracersToggle, "showTracers")
+bindToggle(crosshairToggle, "showCrosshair")
 bindToggle(miniHudToggle, "showMiniHud")
 bindToggle(performanceModeToggle, "performanceMode")
 bindToggle(simplifyMaterialsToggle, "simplifyMaterials")
@@ -2026,6 +2292,7 @@ syncUiFromConfig = function()
 	setToggleState(focusTargetToggle, CONFIG.showFocusTarget)
 	setToggleState(visibilityToggle, CONFIG.visibilityCheck)
 	setToggleState(tracersToggle, CONFIG.showTracers)
+	setToggleState(crosshairToggle, CONFIG.showCrosshair)
 	setToggleState(miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(performanceModeToggle, CONFIG.performanceMode)
 	setToggleState(simplifyMaterialsToggle, CONFIG.simplifyMaterials)
@@ -2033,6 +2300,9 @@ syncUiFromConfig = function()
 	setToggleState(hideEffectsToggle, CONFIG.hideEffects)
 	setToggleState(disableShadowsToggle, CONFIG.disableShadows)
 	setToggleState(compactToggle, CONFIG.compactMode)
+	crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
+	setOptionButtonsState(crosshairColorButtons, CONFIG.crosshairColor)
+	setOptionButtonsState(crosshairSizeButtons, CONFIG.crosshairSize)
 	boxModeButton.Text = getEffectiveBoxMode()
 	presetButton.Text = PRESETS[currentPresetIndex].name
 	saveStatusValue.Text = canUseFileApi() and "AUTO SAVE" or "MEMORY"
@@ -2055,6 +2325,45 @@ boxModeButton.MouseButton1Click:Connect(function()
 	refreshAllEsp()
 	saveSettings()
 end)
+
+crosshairStyleButton.MouseButton1Click:Connect(function()
+	local currentIndex = table.find(CROSSHAIR_OPTIONS, CONFIG.crosshairStyle) or 1
+	currentIndex = currentIndex % #CROSSHAIR_OPTIONS + 1
+	CONFIG.crosshairStyle = CROSSHAIR_OPTIONS[currentIndex]
+	crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
+	updateCrosshair()
+	saveSettings()
+	showToast("Setting Updated", string.format("Crosshair Style set to %s", CONFIG.crosshairStyle), THEME.accent)
+end)
+
+for _, entry in ipairs(crosshairColorButtons) do
+	entry.button.MouseButton1Click:Connect(function()
+		CONFIG.crosshairColor = entry.value
+		setOptionButtonsState(crosshairColorButtons, CONFIG.crosshairColor)
+		updateCrosshair()
+		saveSettings()
+
+		local accentColor = THEME.accent
+		for _, option in ipairs(CROSSHAIR_COLOR_OPTIONS) do
+			if option.name == CONFIG.crosshairColor then
+				accentColor = option.color
+				break
+			end
+		end
+
+		showToast("Setting Updated", string.format("Crosshair Color set to %s", CONFIG.crosshairColor), accentColor)
+	end)
+end
+
+for _, entry in ipairs(crosshairSizeButtons) do
+	entry.button.MouseButton1Click:Connect(function()
+		CONFIG.crosshairSize = entry.value
+		setOptionButtonsState(crosshairSizeButtons, CONFIG.crosshairSize)
+		updateCrosshair()
+		saveSettings()
+		showToast("Setting Updated", string.format("Crosshair Size set to %d", CONFIG.crosshairSize), THEME.accent)
+	end)
+end
 
 applyButton.MouseButton1Click:Connect(function()
 	setEspEnabled(true)
@@ -2095,11 +2404,17 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		showToast("Menu", window.Visible and "Menu shown" or "Menu hidden", window.Visible and THEME.accent or THEME.muted)
 	elseif input.KeyCode == CONFIG.uiToggleKey then
 		gui.Enabled = not gui.Enabled
+		if not gui.Enabled then
+			hideCrosshair()
+		end
+		updateMouseIconVisibility()
 	elseif input.KeyCode == CONFIG.espToggleKey then
 		setEspEnabled(not CONFIG.enabled)
 	elseif input.KeyCode == CONFIG.panicKey then
 		setEspEnabled(false)
 		gui.Enabled = false
+		hideCrosshair()
+		updateMouseIconVisibility()
 	end
 end)
 
@@ -2107,6 +2422,12 @@ local updateAccumulator = 0
 RunService.RenderStepped:Connect(function(deltaTime)
 	if deltaTime > 0 then
 		currentFps = (currentFps == 0) and (1 / deltaTime) or (currentFps * 0.85 + (1 / deltaTime) * 0.15)
+	end
+	if gui.Enabled then
+		updateCrosshair()
+	else
+		hideCrosshair()
+		updateMouseIconVisibility()
 	end
 	updateAccumulator = updateAccumulator + deltaTime
 	if updateAccumulator >= updateInterval then
