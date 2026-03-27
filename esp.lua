@@ -21,9 +21,12 @@ local CONFIG = {
 	crosshairStyle = "Cross",
 	crosshairColor = "White",
 	crosshairSize = 7,
+	fovRadius = 60,
+	cameraFov = 70,
 	boxMode = "Highlight",
 	compactMode = false,
 	showMiniHud = true,
+	showLookDirection = true,
 	performanceMode = false,
 	simplifyMaterials = false,
 	hideTextures = false,
@@ -37,7 +40,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.0.0",
+	version = "1.1.0",
 	uiToggleKey = Enum.KeyCode.RightShift,
 	quickHideKey = Enum.KeyCode.K,
 	espToggleKey = Enum.KeyCode.F4,
@@ -157,6 +160,8 @@ local SETTINGS_FILE = "esp_settings.json"
 local DEV_USER_ID = 10006170169
 local DEV_TAG_TEXT = "0xVyrs [DEV]"
 local DEV_TAG_DISTANCE = 125
+local DEFAULT_FOV_RADIUS = 60
+local DEFAULT_CAMERA_FOV = 70
 local visibleEnemyCount = 0
 local PRESETS
 local currentPresetIndex = 2
@@ -281,6 +286,7 @@ end
 local DRAWING_SUPPORT = {
 	line = supportsDrawing("Line"),
 	square = supportsDrawing("Square"),
+	circle = supportsDrawing("Circle"),
 }
 
 local miniHudLabels = {}
@@ -455,9 +461,9 @@ addCorner(window, 9)
 addStroke(window, THEME.border, 0.2, 1)
 window.Visible = false
 
-local expandedWindowSize = UDim2.new(0, 392, 0, 462)
+local expandedWindowSize = UDim2.new(0, 392, 0, 588)
 local minimizedWindowSize = UDim2.new(0, 392, 0, 96)
-local compactWindowSize = UDim2.new(0, 340, 0, 428)
+local compactWindowSize = UDim2.new(0, 340, 0, 548)
 local compactMinimizedWindowSize = UDim2.new(0, 340, 0, 86)
 local uiMinimized = false
 local updateInterval = 1 / 30
@@ -551,9 +557,12 @@ SETTING_KEYS = {
 	"crosshairStyle",
 	"crosshairColor",
 	"crosshairSize",
+	"fovRadius",
+	"cameraFov",
 	"boxMode",
 	"compactMode",
 	"showMiniHud",
+	"showLookDirection",
 	"performanceMode",
 	"simplifyMaterials",
 	"hideTextures",
@@ -962,6 +971,69 @@ local function setOptionButtonsState(buttonEntries, selectedValue)
 	end
 end
 
+local function createSliderRow(parent, labelText, value, minValue, maxValue)
+	local row = createRow(parent, 52)
+
+	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 10, 0, 6)
+	label.Size = UDim2.new(0, 150, 0, 12)
+
+	local valueLabel = makeLabel(row, tostring(value), 10, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+	valueLabel.AnchorPoint = Vector2.new(1, 0)
+	valueLabel.Position = UDim2.new(1, -10, 0, 6)
+	valueLabel.Size = UDim2.new(0, 36, 0, 12)
+
+	local bar = create("TextButton", {
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 10, 0, 28),
+		Size = UDim2.new(1, -20, 0, 12),
+		Text = "",
+		Parent = row,
+	})
+	addCorner(bar, 999)
+	addStroke(bar, THEME.border, 0.35, 1)
+
+	local fill = create("Frame", {
+		BackgroundColor3 = THEME.accent,
+		BorderSizePixel = 0,
+		Size = UDim2.new(0, 0, 1, 0),
+		Parent = bar,
+	})
+	addCorner(fill, 999)
+
+	local knob = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = THEME.text,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0, 10, 0, 10),
+		Parent = bar,
+	})
+	addCorner(knob, 999)
+
+	return {
+		bar = bar,
+		fill = fill,
+		knob = knob,
+		valueLabel = valueLabel,
+		min = minValue,
+		max = maxValue,
+	}
+end
+
+local function setSliderState(slider, value)
+	local alpha = 0
+	if slider.max > slider.min then
+		alpha = (value - slider.min) / (slider.max - slider.min)
+	end
+	alpha = math.clamp(alpha, 0, 1)
+	slider.fill.Size = UDim2.new(alpha, 0, 1, 0)
+	slider.knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	slider.valueLabel.Text = tostring(value)
+end
+
 local function createTabButton(tabName, labelText)
 	local button = create("TextButton", {
 		AutoButtonColor = false,
@@ -1077,6 +1149,8 @@ local enabledToggle = select(2, createToggleRow(pages.control, "ESP ENABLED", CO
 local presetButton = select(2, createCycleRow(pages.control, "PRESET", PRESETS[currentPresetIndex].name))
 createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
 createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
+local cameraFovSlider = createSliderRow(pages.control, "CAMERA FOV", CONFIG.cameraFov, 40, 120)
+local resetCameraFovButton = select(2, createCycleRow(pages.control, "RESET CAMERA", "DEFAULT"))
 local miniHudToggle = select(2, createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud))
 local compactToggle = select(2, createToggleRow(pages.control, "COMPACT MODE", CONFIG.compactMode))
 local saveStatusValue = select(2, createStatusRow(pages.control, "SETTINGS", canUseFileApi() and "AUTO SAVE" or "MEMORY"))
@@ -1091,10 +1165,13 @@ local boxModeButton = select(2, createCycleRow(pages.display, "BOX MODE", CONFIG
 
 local visibilityToggle = select(2, createToggleRow(pages.combat, "HEAT VISION", CONFIG.visibilityCheck))
 local tracersToggle = select(2, createToggleRow(pages.combat, "TRACERS", CONFIG.showTracers))
+local lookDirectionToggle = select(2, createToggleRow(pages.combat, "LOOK DIRECTION", CONFIG.showLookDirection))
+local fovCircleSlider = createSliderRow(pages.combat, "FOV CIRCLE", CONFIG.fovRadius, 60, 300)
+local resetFovCircleButton = select(2, createCycleRow(pages.combat, "RESET CIRCLE", "DEFAULT"))
 local crosshairToggle = select(2, createToggleRow(pages.combat, "CROSSHAIR", CONFIG.showCrosshair))
 local crosshairStyleButton = select(2, createCycleRow(pages.combat, "CROSSHAIR STYLE", CONFIG.crosshairStyle))
 local crosshairColorButtons = select(2, createOptionButtonsRow(pages.combat, "CROSSHAIR COLOR", { "White", "Blue", "Green", "Red", "Yellow", "Pink" }, CONFIG.crosshairColor))
-local crosshairSizeButtons = select(2, createOptionButtonsRow(pages.combat, "CROSSHAIR SIZE", CROSSHAIR_SIZE_OPTIONS, CONFIG.crosshairSize))
+local crosshairSizeSlider = createSliderRow(pages.combat, "CROSSHAIR SIZE", CONFIG.crosshairSize, CROSSHAIR_SIZE_OPTIONS[1], CROSSHAIR_SIZE_OPTIONS[#CROSSHAIR_SIZE_OPTIONS])
 
 local maxDistanceRow = createRow(pages.combat, 30)
 local maxDistanceLabel = makeLabel(maxDistanceRow, "MAX DISTANCE", 11, THEME.muted, Enum.Font.GothamMedium)
@@ -1117,6 +1194,7 @@ local performanceCache = {
 	lighting = nil,
 }
 local crosshairObjects = {}
+local fovCircleObject
 
 local function isSameTeam(player)
 	if not LOCAL_PLAYER then
@@ -1198,6 +1276,13 @@ end
 
 local function getCamera()
 	return workspace.CurrentCamera
+end
+
+local function applyCameraFov()
+	local camera = getCamera()
+	if camera and math.abs(camera.FieldOfView - CONFIG.cameraFov) > 0.05 then
+		camera.FieldOfView = CONFIG.cameraFov
+	end
 end
 
 local function getCharacterRoot(character)
@@ -1345,10 +1430,13 @@ end
 local function getEspEntry(player)
 	local entry = espObjects[player]
 	if entry then
+		entry.player = player
 		return entry
 	end
 
-	entry = {}
+	entry = {
+		player = player,
+	}
 	espObjects[player] = entry
 	return entry
 end
@@ -1393,6 +1481,14 @@ local function clearEntry(entry)
 			line:Remove()
 		end
 		entry.skeletonLines = nil
+	end
+
+	if entry.lookArrowLines then
+		for _, line in ipairs(entry.lookArrowLines) do
+			line.Visible = false
+			line:Remove()
+		end
+		entry.lookArrowLines = nil
 	end
 
 end
@@ -1579,6 +1675,34 @@ local function ensureSkeletonLines(entry)
 	return entry.skeletonLines
 end
 
+local function ensureLookArrowLines(entry)
+	if not drawingSupported then
+		return nil
+	end
+
+	if not entry.lookArrowLines then
+		entry.lookArrowLines = {}
+		for _ = 1, 3 do
+			local line = createDrawing("Line")
+			if line then
+				line.Thickness = 1.6
+				line.Transparency = 0.95
+				table.insert(entry.lookArrowLines, line)
+			end
+		end
+
+		if #entry.lookArrowLines ~= 3 then
+			for _, line in ipairs(entry.lookArrowLines) do
+				line:Remove()
+			end
+			entry.lookArrowLines = nil
+			return nil
+		end
+	end
+
+	return entry.lookArrowLines
+end
+
 local function ensureCrosshairObjects()
 	if not drawingSupported then
 		return nil
@@ -1610,6 +1734,25 @@ local function ensureCrosshairObjects()
 	return crosshairObjects
 end
 
+local function ensureFovCircle()
+	if not DRAWING_SUPPORT.circle then
+		return nil
+	end
+
+	if not fovCircleObject then
+		fovCircleObject = createDrawing("Circle")
+		if not fovCircleObject then
+			return nil
+		end
+		fovCircleObject.Filled = false
+		fovCircleObject.Thickness = 1.5
+		fovCircleObject.Transparency = 0.9
+		fovCircleObject.NumSides = 48
+	end
+
+	return fovCircleObject
+end
+
 local function clearCrosshairObjects()
 	for key, object in pairs(crosshairObjects) do
 		if object then
@@ -1617,6 +1760,12 @@ local function clearCrosshairObjects()
 			object:Remove()
 		end
 		crosshairObjects[key] = nil
+	end
+end
+
+local function hideFovCircle()
+	if fovCircleObject then
+		fovCircleObject.Visible = false
 	end
 end
 
@@ -1632,6 +1781,7 @@ end
 
 local function hideCrosshair()
 	clearCrosshairObjects()
+	hideFovCircle()
 end
 
 local function updateMouseIconVisibility()
@@ -1693,6 +1843,16 @@ local function updateCrosshair()
 	if showDot then
 		objects.dot.Size = Vector2.new(4, 4)
 		objects.dot.Position = Vector2.new(centerX - 2, centerY - 2)
+	end
+
+	local fovCircle = ensureFovCircle()
+	if fovCircle then
+		fovCircle.Visible = true
+		fovCircle.Color = color
+		fovCircle.Position = Vector2.new(centerX, centerY)
+		fovCircle.Radius = CONFIG.fovRadius
+	else
+		hideFovCircle()
 	end
 
 	updateMouseIconVisibility()
@@ -1847,6 +2007,68 @@ local function updateSkeletonEsp(entry, camera, character, color)
 	end
 end
 
+local function updateLookDirectionEsp(entry, camera, character, root, color)
+	if not CONFIG.showLookDirection or not isFocusedTarget(entry.player) then
+		if entry.lookArrowLines then
+			for _, line in ipairs(entry.lookArrowLines) do
+				line.Visible = false
+			end
+		end
+		return
+	end
+
+	local arrowLines = ensureLookArrowLines(entry)
+	if not arrowLines then
+		return
+	end
+
+	local head = character:FindFirstChild("Head")
+	local originWorld = (head and head.Position or root.Position) + Vector3.new(0, head and 0.15 or 0.55, 0)
+	local tipWorld = originWorld + root.CFrame.LookVector * 1.8
+	local tipPoint = camera:WorldToViewportPoint(tipWorld)
+	local originPoint = camera:WorldToViewportPoint(originWorld)
+
+	if originPoint.Z > 0 and tipPoint.Z > 0 then
+		local tip = Vector2.new(tipPoint.X, tipPoint.Y)
+		local origin = Vector2.new(originPoint.X, originPoint.Y)
+		local direction = tip - origin
+		if direction.Magnitude < 1 then
+			for _, line in ipairs(arrowLines) do
+				line.Visible = false
+			end
+			return
+		end
+
+		direction = direction.Unit
+		local backward = -direction
+		local perpendicular = Vector2.new(-direction.Y, direction.X)
+		local stemStart = tip + backward * 11
+		local wingLength = 9
+		local wingWidth = 5
+		local leftWingEnd = tip + backward * wingLength + perpendicular * wingWidth
+		local rightWingEnd = tip + backward * wingLength - perpendicular * wingWidth
+
+		arrowLines[1].Visible = true
+		arrowLines[1].Color = color
+		arrowLines[1].From = stemStart
+		arrowLines[1].To = tip
+
+		arrowLines[2].Visible = true
+		arrowLines[2].Color = color
+		arrowLines[2].From = tip
+		arrowLines[2].To = leftWingEnd
+
+		arrowLines[3].Visible = true
+		arrowLines[3].Color = color
+		arrowLines[3].From = tip
+		arrowLines[3].To = rightWingEnd
+	else
+		for _, line in ipairs(arrowLines) do
+			line.Visible = false
+		end
+	end
+end
+
 
 local function isPlayerVisible(character, root)
 	if not CONFIG.visibilityCheck then
@@ -1932,6 +2154,7 @@ local function updatePlayerEsp(player)
 	if camera then
 		updateBoxEsp(entry, camera, character, outlineColor)
 		updateSkeletonEsp(entry, camera, character, outlineColor)
+		updateLookDirectionEsp(entry, camera, character, root, outlineColor)
 	end
 
 	if CONFIG.showNames or CONFIG.showDistance or CONFIG.showHealth or showDevTag then
@@ -2234,6 +2457,7 @@ local function playIntroAnimation()
 	window.Visible = true
 	miniHud.Visible = CONFIG.showMiniHud
 	syncUiFromConfig()
+	applyCameraFov()
 	applyPerformanceSettings()
 	applyCompactMode(CONFIG.compactMode)
 	setActiveTab("control")
@@ -2267,6 +2491,7 @@ bindToggle(skeletonToggle, "showSkeleton")
 bindToggle(focusTargetToggle, "showFocusTarget")
 bindToggle(visibilityToggle, "visibilityCheck")
 bindToggle(tracersToggle, "showTracers")
+bindToggle(lookDirectionToggle, "showLookDirection")
 bindToggle(crosshairToggle, "showCrosshair")
 bindToggle(miniHudToggle, "showMiniHud")
 bindToggle(performanceModeToggle, "performanceMode")
@@ -2292,6 +2517,7 @@ syncUiFromConfig = function()
 	setToggleState(focusTargetToggle, CONFIG.showFocusTarget)
 	setToggleState(visibilityToggle, CONFIG.visibilityCheck)
 	setToggleState(tracersToggle, CONFIG.showTracers)
+	setToggleState(lookDirectionToggle, CONFIG.showLookDirection)
 	setToggleState(crosshairToggle, CONFIG.showCrosshair)
 	setToggleState(miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(performanceModeToggle, CONFIG.performanceMode)
@@ -2300,9 +2526,11 @@ syncUiFromConfig = function()
 	setToggleState(hideEffectsToggle, CONFIG.hideEffects)
 	setToggleState(disableShadowsToggle, CONFIG.disableShadows)
 	setToggleState(compactToggle, CONFIG.compactMode)
+	setSliderState(fovCircleSlider, CONFIG.fovRadius)
+	setSliderState(cameraFovSlider, CONFIG.cameraFov)
 	crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
 	setOptionButtonsState(crosshairColorButtons, CONFIG.crosshairColor)
-	setOptionButtonsState(crosshairSizeButtons, CONFIG.crosshairSize)
+	setSliderState(crosshairSizeSlider, CONFIG.crosshairSize)
 	boxModeButton.Text = getEffectiveBoxMode()
 	presetButton.Text = PRESETS[currentPresetIndex].name
 	saveStatusValue.Text = canUseFileApi() and "AUTO SAVE" or "MEMORY"
@@ -2324,6 +2552,22 @@ boxModeButton.MouseButton1Click:Connect(function()
 	boxModeButton.Text = CONFIG.boxMode
 	refreshAllEsp()
 	saveSettings()
+end)
+
+resetCameraFovButton.MouseButton1Click:Connect(function()
+	CONFIG.cameraFov = DEFAULT_CAMERA_FOV
+	setSliderState(cameraFovSlider, CONFIG.cameraFov)
+	applyCameraFov()
+	saveSettings()
+	showToast("Camera FOV Reset", string.format("Camera %d", CONFIG.cameraFov), THEME.accent)
+end)
+
+resetFovCircleButton.MouseButton1Click:Connect(function()
+	CONFIG.fovRadius = DEFAULT_FOV_RADIUS
+	setSliderState(fovCircleSlider, CONFIG.fovRadius)
+	updateCrosshair()
+	saveSettings()
+	showToast("FOV Circle Reset", string.format("Circle %d", CONFIG.fovRadius), THEME.accent)
 end)
 
 crosshairStyleButton.MouseButton1Click:Connect(function()
@@ -2355,13 +2599,64 @@ for _, entry in ipairs(crosshairColorButtons) do
 	end)
 end
 
-for _, entry in ipairs(crosshairSizeButtons) do
-	entry.button.MouseButton1Click:Connect(function()
-		CONFIG.crosshairSize = entry.value
-		setOptionButtonsState(crosshairSizeButtons, CONFIG.crosshairSize)
-		updateCrosshair()
-		saveSettings()
-		showToast("Setting Updated", string.format("Crosshair Size set to %d", CONFIG.crosshairSize), THEME.accent)
+do
+	local draggingCrosshairSize = false
+
+	local function updateCrosshairSizeFromX(positionX)
+		local bar = crosshairSizeSlider.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+
+		local nearestValue = CROSSHAIR_SIZE_OPTIONS[1]
+		local nearestDistance = math.huge
+		for _, option in ipairs(CROSSHAIR_SIZE_OPTIONS) do
+			local optionAlpha = 0
+			if crosshairSizeSlider.max > crosshairSizeSlider.min then
+				optionAlpha = (option - crosshairSizeSlider.min) / (crosshairSizeSlider.max - crosshairSizeSlider.min)
+			end
+			local distance = math.abs(alpha - optionAlpha)
+			if distance < nearestDistance then
+				nearestDistance = distance
+				nearestValue = option
+			end
+		end
+
+		if CONFIG.crosshairSize ~= nearestValue then
+			CONFIG.crosshairSize = nearestValue
+			updateCrosshair()
+			saveSettings()
+			showToast("Setting Updated", string.format("Crosshair Size set to %d", CONFIG.crosshairSize), THEME.accent)
+		end
+
+		setSliderState(crosshairSizeSlider, CONFIG.crosshairSize)
+	end
+
+	crosshairSizeSlider.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingCrosshairSize = true
+			updateCrosshairSizeFromX(input.Position.X)
+		end
+	end)
+
+	crosshairSizeSlider.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingCrosshairSize = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if draggingCrosshairSize and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateCrosshairSizeFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingCrosshairSize = false
+		end
 	end)
 end
 
@@ -2391,6 +2686,104 @@ for _, player in ipairs(Players:GetPlayers()) do
 	if player ~= LOCAL_PLAYER then
 		hookCharacter(player)
 	end
+end
+
+do
+	local draggingFovCircle = false
+
+	local function updateFovCircleFromX(positionX)
+		local bar = fovCircleSlider.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+
+		local value = math.floor(fovCircleSlider.min + ((fovCircleSlider.max - fovCircleSlider.min) * alpha) + 0.5)
+		value = math.clamp(value, fovCircleSlider.min, fovCircleSlider.max)
+
+		if CONFIG.fovRadius ~= value then
+			CONFIG.fovRadius = value
+			updateCrosshair()
+			saveSettings()
+		end
+
+		setSliderState(fovCircleSlider, CONFIG.fovRadius)
+	end
+
+	fovCircleSlider.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingFovCircle = true
+			updateFovCircleFromX(input.Position.X)
+		end
+	end)
+
+	fovCircleSlider.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingFovCircle = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if draggingFovCircle and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateFovCircleFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingFovCircle = false
+		end
+	end)
+end
+
+do
+	local draggingCameraFov = false
+
+	local function updateCameraFovFromX(positionX)
+		local bar = cameraFovSlider.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+
+		local value = math.floor(cameraFovSlider.min + ((cameraFovSlider.max - cameraFovSlider.min) * alpha) + 0.5)
+		value = math.clamp(value, cameraFovSlider.min, cameraFovSlider.max)
+
+		if CONFIG.cameraFov ~= value then
+			CONFIG.cameraFov = value
+			applyCameraFov()
+			saveSettings()
+		end
+
+		setSliderState(cameraFovSlider, CONFIG.cameraFov)
+	end
+
+	cameraFovSlider.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingCameraFov = true
+			updateCameraFovFromX(input.Position.X)
+		end
+	end)
+
+	cameraFovSlider.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingCameraFov = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if draggingCameraFov and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateCameraFovFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingCameraFov = false
+		end
+	end)
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -2423,6 +2816,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
 	if deltaTime > 0 then
 		currentFps = (currentFps == 0) and (1 / deltaTime) or (currentFps * 0.85 + (1 / deltaTime) * 0.15)
 	end
+	applyCameraFov()
 	if gui.Enabled then
 		updateCrosshair()
 	else
