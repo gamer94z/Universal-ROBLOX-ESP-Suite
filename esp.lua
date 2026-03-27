@@ -1274,6 +1274,14 @@ local function isDevPlayer(player)
 	return player and player.UserId == DEV_USER_ID
 end
 
+local function shouldTrackPlayer(player)
+	if player == LOCAL_PLAYER then
+		return false
+	end
+
+	return isEnemyCandidate(player) or isDevPlayer(player)
+end
+
 local function getCamera()
 	return workspace.CurrentCamera
 end
@@ -2114,7 +2122,7 @@ end
 local function updatePlayerEsp(player)
 	local entry = getEspEntry(player)
 
-	if not CONFIG.enabled or not isEnemyCandidate(player) then
+	if not CONFIG.enabled or not shouldTrackPlayer(player) then
 		clearEntry(entry)
 		return
 	end
@@ -2140,13 +2148,15 @@ local function updatePlayerEsp(player)
 	local displayColor = getDisplayColor(espColor, visible)
 	local focusTarget = isFocusedTarget(player)
 	local showDevTag = isDevPlayer(player) and distance <= DEV_TAG_DISTANCE
-	local tracerColor = focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player))
+	local devRainbowColor = showDevTag and getRainbowColor() or nil
+	local tracerColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player)))
 	local camera = getCamera()
 	local effectiveBoxMode = getEffectiveBoxMode()
-	local outlineColor = focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or espColor)
+	local outlineColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or espColor))
+	local fillColor = showDevTag and devRainbowColor or espColor
 
 	local highlight = ensureHighlight(entry, character)
-	highlight.FillColor = espColor
+	highlight.FillColor = fillColor
 	highlight.FillTransparency = effectiveBoxMode == "Highlight" and CONFIG.fillTransparency or 1
 	highlight.OutlineColor = outlineColor
 	highlight.OutlineTransparency = effectiveBoxMode == "Highlight" and CONFIG.outlineTransparency or 1
@@ -2185,7 +2195,7 @@ local function updatePlayerEsp(player)
 
 		title.Text = focusTarget and ("[TARGET] " .. table.concat(labelParts, " ")) or table.concat(labelParts, " ")
 		if showDevTag then
-			title.TextColor3 = getRainbowColor()
+			title.TextColor3 = devRainbowColor
 		else
 			title.TextColor3 = focusTarget and THEME.focus or espColor
 		end
@@ -2198,7 +2208,7 @@ local function updatePlayerEsp(player)
 
 			entry.healthBack.Visible = CONFIG.showHealth
 			entry.healthFill.Size = UDim2.new(healthPercent, 0, 1, 0)
-			entry.healthFill.BackgroundColor3 = focusTarget and THEME.focus or espColor
+			entry.healthFill.BackgroundColor3 = showDevTag and devRainbowColor or (focusTarget and THEME.focus or espColor)
 		elseif entry.healthBack then
 			entry.healthBack.Visible = false
 		end
@@ -2276,7 +2286,7 @@ local function refreshAllEsp()
 			local root = character and getCharacterRoot(character)
 			local localCharacter = LOCAL_PLAYER.Character
 			local localRoot = localCharacter and getCharacterRoot(localCharacter)
-			if character and root and localRoot and isEnemyCandidate(player) then
+			if character and root and localRoot and shouldTrackPlayer(player) then
 				trackedEnemyCount = trackedEnemyCount + 1
 				local distance = (root.Position - localRoot.Position).Magnitude
 				if distance <= CONFIG.maxDistance and isPlayerVisible(character, root) then
