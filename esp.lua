@@ -65,7 +65,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.3.1",
+	version = "1.3.2",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	uiToggleKey = Enum.KeyCode.RightShift,
@@ -5013,14 +5013,6 @@ UserInputService.InputEnded:Connect(function(input)
 	elseif input.KeyCode == Enum.KeyCode.Space or input.KeyCode == Enum.KeyCode.LeftControl then
 		viewState.moveUp = 0
 	end
-end)
-
-RunService:BindToRenderStep("ESP_CameraFov", Enum.RenderPriority.Camera.Value + 1, function()
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
-		return
-	end
-
-	applyCameraFov()
 end)
 
 local updateAccumulator = 0

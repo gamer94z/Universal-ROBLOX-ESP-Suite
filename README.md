@@ -2,7 +2,7 @@
 
 A single-file Roblox ESP with a polished in-game menu, saved settings, combat-focused overlays, and client-side view/performance tools.
 
-Current release: `v1.3.1`
+Current release: `v1.3.2`
 
 ## Overview
 
@@ -103,6 +103,7 @@ Combat is split into sub-tabs:
 - Performance changes are local visual adjustments only.
 - Reinject protection is built in so old instances do not keep fighting over camera and mouse state.
 - The focused target is highlighted with the yellow focus color for quicker visual confirmation.
+- `v1.3.2` removes the render-step camera FOV lock that could conflict with FPS gun systems.
 
 ## Setup
 
