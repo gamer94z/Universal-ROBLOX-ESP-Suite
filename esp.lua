@@ -29,6 +29,7 @@ local CONFIG = {
 	tracerThickness = 2,
 	tracerTransparency = 100,
 	showCrosshair = true,
+	showFovCircle = true,
 	crosshairStyle = "Cross",
 	crosshairColor = "White",
 	crosshairSize = 7,
@@ -65,7 +66,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.3.2",
+	version = "1.3.3",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	uiToggleKey = Enum.KeyCode.RightShift,
@@ -853,6 +854,7 @@ SETTING_KEYS = {
 	"tracerThickness",
 	"tracerTransparency",
 	"showCrosshair",
+	"showFovCircle",
 	"crosshairStyle",
 	"crosshairColor",
 	"crosshairSize",
@@ -1299,10 +1301,21 @@ local function createSliderRow(parent, labelText, value, minValue, maxValue)
 	label.Position = UDim2.new(0, 10, 0, 6)
 	label.Size = UDim2.new(0, 150, 0, 12)
 
-	local valueLabel = makeLabel(row, tostring(value), 10, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-	valueLabel.AnchorPoint = Vector2.new(1, 0)
-	valueLabel.Position = UDim2.new(1, -10, 0, 6)
-	valueLabel.Size = UDim2.new(0, 36, 0, 12)
+	local valueLabel = create("TextBox", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(1, -10, 0, 4),
+		Size = UDim2.new(0, 44, 0, 16),
+		Text = tostring(value),
+		TextColor3 = THEME.text,
+		TextSize = 10,
+		Parent = row,
+	})
+	addCorner(valueLabel, 4)
+	addStroke(valueLabel, THEME.border, 0.35, 1)
 
 	local bar = create("TextButton", {
 		AutoButtonColor = false,
@@ -1342,6 +1355,24 @@ local function createSliderRow(parent, labelText, value, minValue, maxValue)
 		min = minValue,
 		max = maxValue,
 	}
+end
+
+local function bindSliderValueInput(slider, normalizeValue, commitValue)
+	slider.valueLabel.FocusLost:Connect(function(enterPressed)
+		if not enterPressed and UserInputService:GetFocusedTextBox() == slider.valueLabel then
+			return
+		end
+
+		local typedValue = tonumber(slider.valueLabel.Text)
+		if not typedValue then
+			setSliderState(slider, normalizeValue())
+			return
+		end
+
+		local nextValue = normalizeValue(typedValue)
+		commitValue(nextValue)
+		setSliderState(slider, normalizeValue())
+	end)
 end
 
 local function createSpectateRow(parent)
@@ -1995,6 +2026,7 @@ local crosshairColorButtons = select(2, createOptionButtonsRow(pages.combat, "CR
 tracerSliders.crosshairThickness = createSliderRow(pages.combat, "CROSSHAIR THICKNESS", CONFIG.crosshairThickness, 1, 4)
 tracerSliders.crosshairSizeSlider = createSliderRow(pages.combat, "CROSSHAIR SIZE", CONFIG.crosshairSize, CROSSHAIR_SIZE_OPTIONS[1], CROSSHAIR_SIZE_OPTIONS[#CROSSHAIR_SIZE_OPTIONS])
 tracerSliders.crosshairGap = createSliderRow(pages.combat, "CROSSHAIR GAP", CONFIG.crosshairGap, 0, 10)
+tracerSliders.fovCircleToggle = select(2, createToggleRow(pages.combat, "FOV CIRCLE VISIBLE", CONFIG.showFovCircle))
 
 do
 	tracerSliders.targetCard.Parent = tracerSliders.tabs.targetingPage
@@ -2011,6 +2043,7 @@ do
 	tracerSliders.transparency.bar.Parent.Parent = tracerSliders.tabs.tracersPage
 
 	tracerSliders.fovCircleSlider.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.fovCircleToggle.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.fovThickness.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.fovTransparency.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.fovCircleSlider.reset.Parent.Parent = tracerSliders.tabs.crosshairPage
@@ -3082,7 +3115,7 @@ local function hideCrosshair()
 end
 
 local function updateMouseIconVisibility()
-	local shouldShowMouseIcon = viewState.freeCamEnabled or not (gui.Enabled and CONFIG.showCrosshair)
+	local shouldShowMouseIcon = viewState.freeCamEnabled or (window.Visible and not CONFIG.showCrosshair)
 	if UserInputService.MouseIconEnabled ~= shouldShowMouseIcon then
 		UserInputService.MouseIconEnabled = shouldShowMouseIcon
 	end
@@ -3147,14 +3180,18 @@ local function updateCrosshair()
 		objects.dot.Position = Vector2.new(centerX - 2, centerY - 2)
 	end
 
-	local fovCircle = ensureFovCircle()
-	if fovCircle then
-		fovCircle.Visible = true
-		fovCircle.Color = color
-		fovCircle.Thickness = CONFIG.fovCircleThickness
-		fovCircle.Position = Vector2.new(centerX, centerY)
-		fovCircle.Radius = CONFIG.fovRadius
-		fovCircle.Transparency = math.clamp(CONFIG.fovCircleTransparency / 100, 0.1, 1)
+	if CONFIG.showFovCircle then
+		local fovCircle = ensureFovCircle()
+		if fovCircle then
+			fovCircle.Visible = true
+			fovCircle.Color = color
+			fovCircle.Thickness = CONFIG.fovCircleThickness
+			fovCircle.Position = Vector2.new(centerX, centerY)
+			fovCircle.Radius = CONFIG.fovRadius
+			fovCircle.Transparency = math.clamp(CONFIG.fovCircleTransparency / 100, 0.1, 1)
+		else
+			hideFovCircle()
+		end
 	else
 		hideFovCircle()
 	end
@@ -4116,6 +4153,7 @@ bindToggle(tracerSliders.tracersToggle, "showTracers")
 bindToggle(tracerSliders.focusLock, "focusLock")
 bindToggle(tracerSliders.lookDirectionToggle, "showLookDirection")
 bindToggle(tracerSliders.crosshairToggle, "showCrosshair")
+bindToggle(tracerSliders.fovCircleToggle, "showFovCircle")
 bindToggle(miniHudToggle, "showMiniHud")
 bindToggle(viewButtons.removeZoomLimit, "removeZoomLimit")
 bindToggle(miniHudLabels.utility.antiAfk, "antiAfk")
@@ -4161,6 +4199,7 @@ syncUiFromConfig = function()
 	setSliderState(tracerSliders.fovTransparency, CONFIG.fovCircleTransparency)
 	setToggleState(tracerSliders.lookDirectionToggle, CONFIG.showLookDirection)
 	setToggleState(tracerSliders.crosshairToggle, CONFIG.showCrosshair)
+	setToggleState(tracerSliders.fovCircleToggle, CONFIG.showFovCircle)
 	setToggleState(miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(viewButtons.removeZoomLimit, CONFIG.removeZoomLimit)
 	setToggleState(miniHudLabels.utility.antiAfk, CONFIG.antiAfk)
@@ -4505,6 +4544,30 @@ do
 			draggingCrosshairSize = false
 		end
 	end)
+
+	bindSliderValueInput(tracerSliders.crosshairSizeSlider, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.crosshairSize
+		end
+
+		local nearestValue = CROSSHAIR_SIZE_OPTIONS[1]
+		local nearestDistance = math.huge
+		for _, option in ipairs(CROSSHAIR_SIZE_OPTIONS) do
+			local distance = math.abs(option - typedValue)
+			if distance < nearestDistance then
+				nearestDistance = distance
+				nearestValue = option
+			end
+		end
+
+		return nearestValue
+	end, function(nextValue)
+		if CONFIG.crosshairSize ~= nextValue then
+			CONFIG.crosshairSize = nextValue
+			updateCrosshair()
+			saveSettings()
+		end
+	end)
 end
 
 do
@@ -4553,6 +4616,20 @@ do
 	UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingHeadDotSize = false
+		end
+	end)
+
+	bindSliderValueInput(displayToggles.headDotSize, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.headDotSize
+		end
+
+		return math.clamp(math.floor(typedValue + 0.5), displayToggles.headDotSize.min, displayToggles.headDotSize.max)
+	end, function(nextValue)
+		if CONFIG.headDotSize ~= nextValue then
+			CONFIG.headDotSize = nextValue
+			refreshAllEsp()
+			saveSettings()
 		end
 	end)
 end
@@ -4781,6 +4858,20 @@ do
 			draggingFovCircle = false
 		end
 	end)
+
+	bindSliderValueInput(tracerSliders.fovCircleSlider, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.fovRadius
+		end
+
+		return math.clamp(math.floor(typedValue + 0.5), tracerSliders.fovCircleSlider.min, tracerSliders.fovCircleSlider.max)
+	end, function(nextValue)
+		if CONFIG.fovRadius ~= nextValue then
+			CONFIG.fovRadius = nextValue
+			updateCrosshair()
+			saveSettings()
+		end
+	end)
 end
 
 do
@@ -4828,6 +4919,20 @@ do
 	UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingCameraFov = false
+		end
+	end)
+
+	bindSliderValueInput(cameraFovSlider, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.cameraFov
+		end
+
+		return math.clamp(math.floor(typedValue + 0.5), cameraFovSlider.min, cameraFovSlider.max)
+	end, function(nextValue)
+		if CONFIG.cameraFov ~= nextValue then
+			CONFIG.cameraFov = nextValue
+			applyCameraFov()
+			saveSettings()
 		end
 	end)
 end
@@ -4895,6 +5000,30 @@ do
 			draggingCombatSlider = nil
 		end
 	end)
+
+	for _, entry in ipairs({
+		{ slider = tracerSliders.thickness, key = "tracerThickness", onChange = refreshAllEsp },
+		{ slider = tracerSliders.transparency, key = "tracerTransparency", onChange = refreshAllEsp },
+		{ slider = tracerSliders.maxDistance, key = "maxDistance", onChange = refreshAllEsp },
+		{ slider = tracerSliders.fovThickness, key = "fovCircleThickness", onChange = updateCrosshair },
+		{ slider = tracerSliders.fovTransparency, key = "fovCircleTransparency", onChange = updateCrosshair },
+		{ slider = tracerSliders.crosshairThickness, key = "crosshairThickness", onChange = updateCrosshair },
+		{ slider = tracerSliders.crosshairGap, key = "crosshairGap", onChange = updateCrosshair },
+	}) do
+		bindSliderValueInput(entry.slider, function(typedValue)
+			if typedValue == nil then
+				return CONFIG[entry.key]
+			end
+
+			return math.clamp(math.floor(typedValue + 0.5), entry.slider.min, entry.slider.max)
+		end, function(nextValue)
+			if CONFIG[entry.key] ~= nextValue then
+				CONFIG[entry.key] = nextValue
+				saveSettings()
+				entry.onChange()
+			end
+		end)
+	end
 end
 
 do
@@ -4941,6 +5070,19 @@ do
 	UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingFreeCamSpeed = false
+		end
+	end)
+
+	bindSliderValueInput(viewButtons.speed, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.freeCamSpeed
+		end
+
+		return math.clamp(math.floor(typedValue + 0.5), viewButtons.speed.min, viewButtons.speed.max)
+	end, function(nextValue)
+		if CONFIG.freeCamSpeed ~= nextValue then
+			CONFIG.freeCamSpeed = nextValue
+			saveSettings()
 		end
 	end)
 end

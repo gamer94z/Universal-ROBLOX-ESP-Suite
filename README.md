@@ -2,7 +2,7 @@
 
 A single-file Roblox ESP with a polished in-game menu, saved settings, combat-focused overlays, and client-side view/performance tools.
 
-Current release: `v1.3.2`
+Current release: `v1.3.3`
 
 ## Overview
 
@@ -27,6 +27,7 @@ The current build focuses on:
 - Threat targeting with `Closest`, `Visible`, `Armed`, and `Smart` modes
 - Focus lock and expanded live target info
 - Custom crosshair with style, color, size, thickness, gap, and FOV-circle controls
+- Click-to-type numeric slider values for finer tuning
 - Freecam, spectate, spectate prev/next, freecam speed, reset view, and remove zoom limit
 - Mini live HUD
 - Performance tab with local visual optimization options
@@ -104,6 +105,7 @@ Combat is split into sub-tabs:
 - Reinject protection is built in so old instances do not keep fighting over camera and mouse state.
 - The focused target is highlighted with the yellow focus color for quicker visual confirmation.
 - `v1.3.2` removes the render-step camera FOV lock that could conflict with FPS gun systems.
+- `v1.3.3` improves cursor behavior for FPS gun systems and keeps the Roblox mouse icon hidden while the custom crosshair is active.
 
 ## Setup
 
