@@ -1,3 +1,11 @@
+--[[
+	Copyright (c) 2026 gamer94z / 0xVyrs
+	All Rights Reserved.
+
+	This script is proprietary software. Unauthorized copying, redistribution,
+	modification, resale, reposting, or reuse of this source is not permitted.
+]]
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")

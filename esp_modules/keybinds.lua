@@ -1,3 +1,11 @@
+--[[
+	Copyright (c) 2026 gamer94z / 0xVyrs
+	All Rights Reserved.
+
+	This module is part of proprietary 0xVyrs software. Unauthorized copying,
+	redistribution, modification, resale, reposting, or reuse is not permitted.
+]]
+
 return function(context)
 	local featureDefs = {
 		{ id = "freeCam", label = "Free Cam" },

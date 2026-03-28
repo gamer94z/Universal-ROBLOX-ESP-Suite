@@ -1,8 +1,17 @@
 # 0xVyrs Universal ROBLOX ESP Suite
 
-A compact, single-file Roblox ESP with a modern UI, persistent settings, and combat-focused visual tools.
+A proprietary Roblox ESP release by `0xVyrs`, built for authorized loader-based use with a modern UI, persistent settings, and combat-focused visual tools.
 
 **Version:** `v1.3.4`
+
+## Ownership
+
+Copyright (c) 2026 `gamer94z / 0xVyrs`
+
+This project is proprietary and distributed under an `All Rights Reserved` model.
+Source access, redistribution, reuploading, modification, resale, and reuse are not permitted without explicit written permission from the owner.
+
+This repository is not intended to grant open-source rights.
 
 ## Latest Patch
 
@@ -17,6 +26,13 @@ A compact, single-file Roblox ESP with a modern UI, persistent settings, and com
 - Patch notes in this README are kept short and focused on visible feature changes
 - Small stability fixes and UI cleanup may ship without a long breakdown
 - The in-script version number is the source of truth for the current release
+
+## Distribution Notes
+
+- Intended usage is through an approved loadstring or private distribution channel
+- Public raw-source hosting is not the intended release model for this project
+- If you are running a public GitHub repo, move the real source to a private location before using a public loader
+- This README does not grant permission to copy or republish the source
 
 ---
 
@@ -61,7 +77,7 @@ A compact, single-file Roblox ESP with a modern UI, persistent settings, and com
 
 ---
 
-## Loadstring
+## Authorized Loadstring
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp.lua"))()
+loadstring(game:HttpGet("https://your-private-loader-endpoint/0xvyrs/esp.lua"))()
