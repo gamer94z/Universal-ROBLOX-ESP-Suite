@@ -2,7 +2,21 @@
 
 A compact, single-file Roblox ESP with a modern UI, persistent settings, and combat-focused visual tools.
 
-**Version:** `v1.3.3`
+**Version:** `v1.3.4`
+
+## Latest Patch
+
+- Added a dedicated `KEYBINDS` section inside `CONTROL` for custom feature binds
+- Added `Toggle` and `Hold` bind modes with active keybinds shown under the watermark
+- Improved the mini HUD styling and moved the target card into a cleaner stacked overlay
+- Updated the intro with the new center-screen audio-backed open animation
+- Synced standalone loading so the main `esp.lua` can still run even when the local module file is unavailable
+
+## Patch Log Notes
+
+- Patch notes in this README are kept short and focused on visible feature changes
+- Small stability fixes and UI cleanup may ship without a long breakdown
+- The in-script version number is the source of truth for the current release
 
 ---
 

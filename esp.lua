@@ -44,6 +44,7 @@ local CONFIG = {
 	boxMode = "Highlight",
 	compactMode = false,
 	showMiniHud = true,
+	showKeybindsUi = true,
 	showLookDirection = true,
 	antiAfk = false,
 	autoLoadGamePreset = true,
@@ -66,7 +67,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.3.3",
+	version = "1.3.4",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	uiToggleKey = Enum.KeyCode.RightShift,
@@ -74,6 +75,38 @@ local CONFIG = {
 	espToggleKey = Enum.KeyCode.F4,
 	panicKey = Enum.KeyCode.End,
 }
+
+local DEFAULT_FEATURE_KEYBINDS = {
+	freeCam = "V",
+	focusLock = "Q",
+	showTracers = "T",
+	showCrosshair = "C",
+	showFovCircle = "Z",
+	showTargetCard = "H",
+	showMiniHud = "M",
+	showLookDirection = "L",
+}
+
+local FEATURE_KEYBINDS = {}
+for featureId, keyText in pairs(DEFAULT_FEATURE_KEYBINDS) do
+	FEATURE_KEYBINDS[featureId] = keyText
+end
+
+local DEFAULT_FEATURE_KEYBIND_MODES = {
+	freeCam = "Toggle",
+	focusLock = "Toggle",
+	showTracers = "Toggle",
+	showCrosshair = "Toggle",
+	showFovCircle = "Toggle",
+	showTargetCard = "Toggle",
+	showMiniHud = "Toggle",
+	showLookDirection = "Toggle",
+}
+
+local FEATURE_KEYBIND_MODES = {}
+for featureId, modeText in pairs(DEFAULT_FEATURE_KEYBIND_MODES) do
+	FEATURE_KEYBIND_MODES[featureId] = modeText
+end
 
 local THEME = {
 	window = Color3.fromRGB(20, 22, 30),
@@ -141,6 +174,29 @@ local function keyCodeToText(keyCode)
 	return tostring(keyCode):gsub("Enum.KeyCode.", ""):upper()
 end
 
+local function keyTextToKeyCode(keyText)
+	if not keyText or keyText == "" then
+		return nil
+	end
+
+	local direct
+	pcall(function()
+		direct = Enum.KeyCode[keyText]
+	end)
+	if direct then
+		return direct
+	end
+
+	local upper = tostring(keyText):upper()
+	for _, keyCode in ipairs(Enum.KeyCode:GetEnumItems()) do
+		if keyCodeToText(keyCode) == upper then
+			return keyCode
+		end
+	end
+
+	return nil
+end
+
 local function formatSettingName(key)
 	local words = {}
 	for part in key:gmatch("[^_]+") do
@@ -197,9 +253,605 @@ local SETTING_KEYS
 local toastLayer
 local syncUiFromConfig
 local getCharacterRoot
+local applyConfigToggleState
+local keybindController
+local keybindState = {
+	toggleButtonsByConfig = {},
+}
+local KEYBINDS_MODULE_SOURCE = [==[
+return function(context)
+	local featureDefs = {
+		{ id = "freeCam", label = "Free Cam" },
+		{ id = "focusLock", label = "Focus Lock" },
+		{ id = "showTracers", label = "Tracers" },
+		{ id = "showCrosshair", label = "Crosshair" },
+		{ id = "showFovCircle", label = "FOV Circle" },
+		{ id = "showTargetCard", label = "Target Card" },
+		{ id = "showMiniHud", label = "Mini HUD" },
+		{ id = "showLookDirection", label = "Look Dir" },
+	}
+
+	local MODE_VALUES = { "Toggle", "Hold" }
+	local MOUSE_INPUTS = {
+		MouseButton1 = Enum.UserInputType.MouseButton1,
+		MouseButton2 = Enum.UserInputType.MouseButton2,
+		MouseButton3 = Enum.UserInputType.MouseButton3,
+	}
+	local MOUSE_ORDER = { "MouseButton1", "MouseButton2", "MouseButton3" }
+	local state = {
+		listening = nil,
+		rows = {},
+		modeButtons = {},
+		displayButton = nil,
+		menu = nil,
+		list = nil,
+		title = nil,
+		count = nil,
+		held = {},
+	}
+
+	local function getDef(featureId)
+		for _, def in ipairs(featureDefs) do
+			if def.id == featureId then
+				return def
+			end
+		end
+	end
+
+	local function getKeybindText(id)
+		return context.featureKeybinds[id]
+	end
+
+	local function isMouseBindText(text)
+		return MOUSE_INPUTS[text] ~= nil
+	end
+
+	local function getBindDescriptor(text)
+		if not text or text == "" then
+			return nil
+		end
+
+		if isMouseBindText(text) then
+			return {
+				text = text,
+				userInputType = MOUSE_INPUTS[text],
+			}
+		end
+
+		local keyCode = context.keyTextToKeyCode(text)
+		if keyCode then
+			return {
+				text = context.keyCodeToText(keyCode),
+				keyCode = keyCode,
+			}
+		end
+
+		return nil
+	end
+
+	local function getBindForId(id)
+		return getBindDescriptor(getKeybindText(id))
+	end
+
+	local function inputToBindText(input)
+		if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+			return context.keyCodeToText(input.KeyCode)
+		end
+
+		for _, bindText in ipairs(MOUSE_ORDER) do
+			if input.UserInputType == MOUSE_INPUTS[bindText] then
+				return bindText
+			end
+		end
+
+		return nil
+	end
+
+	local function inputMatchesBind(input, bind)
+		if not bind then
+			return false
+		end
+
+		if bind.keyCode then
+			return input.KeyCode == bind.keyCode
+		end
+
+		if bind.userInputType then
+			return input.UserInputType == bind.userInputType
+		end
+
+		return false
+	end
+
+	local function getReservedBindTexts()
+		local reserved = {}
+		local function push(keyCode)
+			if keyCode then
+				reserved[context.keyCodeToText(keyCode)] = true
+			end
+		end
+
+		push(context.config.uiToggleKey)
+		push(context.config.quickHideKey)
+		push(context.config.espToggleKey)
+		push(context.config.panicKey)
+		return reserved
+	end
+
+	local function getMode(id)
+		return context.featureKeybindModes[id] or "Toggle"
+	end
+
+	local function setMode(id, mode)
+		context.featureKeybindModes[id] = mode
+	end
+
+	local function isActive(id)
+		if id == "freeCam" then
+			return context.viewState.freeCamEnabled
+		end
+
+		return context.config[id] == true
+	end
+
+	local function setFeatureActive(id, desiredState)
+		if id == "freeCam" then
+			if context.viewState.freeCamEnabled ~= desiredState then
+				context.toggleFreeCam()
+			end
+			return
+		end
+
+		if context.config[id] ~= desiredState then
+			context.applyConfigToggleState(id, desiredState)
+		end
+	end
+
+	local function trigger(id)
+		if getMode(id) == "Hold" then
+			if not state.held[id] then
+				state.held[id] = true
+				setFeatureActive(id, true)
+			end
+			return
+		end
+
+		setFeatureActive(id, not isActive(id))
+	end
+
+	local function release(id)
+		if getMode(id) == "Hold" and state.held[id] then
+			state.held[id] = nil
+			setFeatureActive(id, false)
+		end
+	end
+
+	local function isTyping()
+		return context.userInputService and context.userInputService:GetFocusedTextBox() ~= nil
+	end
+
+	local function cycleMode(currentMode)
+		for index, value in ipairs(MODE_VALUES) do
+			if value == currentMode then
+				return MODE_VALUES[(index % #MODE_VALUES) + 1]
+			end
+		end
+		return MODE_VALUES[1]
+	end
+
+	local function refreshRows()
+		for _, def in ipairs(featureDefs) do
+			local button = state.rows[def.id]
+			if button then
+				if state.listening == def.id then
+					button.Text = "PRESS..."
+					button.BackgroundColor3 = context.theme.accentSoft
+				else
+					local text = getKeybindText(def.id)
+					button.Text = (text and text ~= "") and text or "NONE"
+					button.BackgroundColor3 = Color3.fromRGB(35, 40, 53)
+				end
+			end
+
+			local modeButton = state.modeButtons[def.id]
+			if modeButton then
+				modeButton.Text = string.upper(getMode(def.id))
+			end
+		end
+
+		if state.displayButton then
+			if context.setToggleState then
+				context.setToggleState(state.displayButton, context.config.showKeybindsUi)
+			else
+				state.displayButton.Text = context.config.showKeybindsUi and "ON" or "OFF"
+			end
+		end
+	end
+
+	local function getActiveEntries()
+		local entries = {}
+		for _, def in ipairs(featureDefs) do
+			local bind = getBindForId(def.id)
+			if bind and isActive(def.id) then
+				table.insert(entries, {
+					key = bind.text,
+					label = def.label,
+					mode = getMode(def.id),
+				})
+			end
+		end
+
+		table.sort(entries, function(a, b)
+			return a.label < b.label
+		end)
+
+		return entries
+	end
+
+	local function getAssignedEntries()
+		local entries = {}
+		for _, def in ipairs(featureDefs) do
+			local bind = getBindForId(def.id)
+			if bind then
+				table.insert(entries, {
+					key = bind.text,
+					label = def.label,
+					mode = getMode(def.id),
+				})
+			end
+		end
+
+		table.sort(entries, function(a, b)
+			return a.label < b.label
+		end)
+
+		return entries
+	end
+
+	local function updateMenu()
+		if not state.menu or not state.list or not state.count then
+			return
+		end
+
+		for _, child in ipairs(state.list:GetChildren()) do
+			if not child:IsA("UIListLayout") then
+				child:Destroy()
+			end
+		end
+
+		local activeEntries = getActiveEntries()
+		local assignedEntries = getAssignedEntries()
+		local showMenu = #activeEntries > 0 or #assignedEntries > 0
+		state.menu.Visible = context.gui.Enabled and context.config.showKeybindsUi and showMenu
+		state.count.Text = string.format("%d ACTIVE", #activeEntries)
+
+		local menuHeight = 42
+
+		local function addSectionLabel(text, color)
+			menuHeight = menuHeight + 14
+			context.create("TextLabel", {
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Size = UDim2.new(1, 0, 0, 12),
+				Font = Enum.Font.GothamBold,
+				Text = text,
+				TextColor3 = color,
+				TextSize = 8,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 13,
+				Parent = state.list,
+			})
+		end
+
+		local function addEntryRow(entry, textColor, rowColor)
+			menuHeight = menuHeight + 24
+			local row = context.create("Frame", {
+				BackgroundColor3 = rowColor,
+				BorderSizePixel = 0,
+				Size = UDim2.new(1, 0, 0, 20),
+				ZIndex = 13,
+				Parent = state.list,
+			})
+			context.addCorner(row, 6)
+
+			local label = context.makeLabel(row, entry.label, 9, textColor, Enum.Font.GothamMedium)
+			label.Position = UDim2.new(0, 8, 0, 0)
+			label.Size = UDim2.new(1, -86, 1, 0)
+			label.ZIndex = 14
+
+			local keyBadge = context.create("TextLabel", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				BackgroundColor3 = Color3.fromRGB(38, 44, 56),
+				BorderSizePixel = 0,
+				Position = UDim2.new(1, -8, 0.5, 0),
+				Size = UDim2.new(0, 54, 0, 14),
+				Font = Enum.Font.GothamBold,
+				Text = entry.key,
+				TextColor3 = context.theme.text,
+				TextSize = 8,
+				ZIndex = 14,
+				Parent = row,
+			})
+			context.addCorner(keyBadge, 999)
+
+			if entry.mode == "Hold" then
+				local modeBadge = context.create("TextLabel", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					BackgroundColor3 = context.theme.accentSoft,
+					BorderSizePixel = 0,
+					Position = UDim2.new(1, -66, 0.5, 0),
+					Size = UDim2.new(0, 28, 0, 14),
+					Font = Enum.Font.GothamBold,
+					Text = "HOLD",
+					TextColor3 = context.theme.text,
+					TextSize = 7,
+					ZIndex = 14,
+					Parent = row,
+				})
+				context.addCorner(modeBadge, 999)
+			end
+		end
+
+		if #activeEntries > 0 then
+			addSectionLabel("ACTIVE", context.theme.accent)
+			for _, entry in ipairs(activeEntries) do
+				addEntryRow(entry, context.theme.text, Color3.fromRGB(27, 33, 44))
+			end
+		end
+
+		if #assignedEntries > 0 then
+			addSectionLabel("ASSIGNED", context.theme.muted)
+			for _, entry in ipairs(assignedEntries) do
+				addEntryRow(entry, context.theme.muted, Color3.fromRGB(22, 27, 36))
+			end
+		end
+
+		state.menu.Size = UDim2.new(0, 232, 0, menuHeight)
+	end
+
+	local function buildWatermarkMenu()
+		local menu = context.create("Frame", {
+			BackgroundColor3 = Color3.fromRGB(18, 22, 32),
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 16, 0, 98),
+			Size = UDim2.new(0, 232, 0, 42),
+			Visible = false,
+			ZIndex = 12,
+			Parent = context.gui,
+		})
+		context.addCorner(menu, 8)
+		context.addStroke(menu, context.theme.border, 0.25, 1)
+
+		local accent = context.create("Frame", {
+			BackgroundColor3 = context.theme.accent,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 0, 0, 0),
+			Size = UDim2.new(0, 3, 1, 0),
+			ZIndex = 13,
+			Parent = menu,
+		})
+		context.addCorner(accent, 8)
+
+		local title = context.makeLabel(menu, "KEYBINDS", 10, context.theme.text, Enum.Font.GothamBold)
+		title.Position = UDim2.new(0, 12, 0, 4)
+		title.Size = UDim2.new(0, 100, 0, 14)
+		title.ZIndex = 13
+
+		local count = context.create("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = context.theme.accentSoft,
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0, 6),
+			Size = UDim2.new(0, 62, 0, 16),
+			Font = Enum.Font.GothamBold,
+			Text = "0 ACTIVE",
+			TextColor3 = context.theme.text,
+			TextSize = 8,
+			ZIndex = 13,
+			Parent = menu,
+		})
+		context.addCorner(count, 999)
+
+		local list = context.create("Frame", {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 8, 0, 24),
+			Size = UDim2.new(1, -16, 1, -28),
+			ZIndex = 13,
+			Parent = menu,
+		})
+
+		context.create("UIListLayout", {
+			Padding = UDim.new(0, 4),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = list,
+		})
+
+		state.menu = menu
+		state.list = list
+		state.title = title
+		state.count = count
+	end
+
+	local function assignKeybind(featureId, newText)
+		local reserved = getReservedBindTexts()
+		if newText ~= "" and reserved[newText] then
+			if context.showToast then
+				context.showToast("Keybinds", string.format("%s is reserved", newText), context.theme.muted)
+			end
+			return false
+		end
+
+		for otherId, otherText in pairs(context.featureKeybinds) do
+			if otherId ~= featureId and otherText == newText and newText ~= "" then
+				context.featureKeybinds[otherId] = ""
+				local otherDef = getDef(otherId)
+				if context.showToast and otherDef then
+					context.showToast("Keybinds", string.format("%s moved off %s", otherDef.label, newText), context.theme.muted)
+				end
+			end
+		end
+
+		context.featureKeybinds[featureId] = newText
+		return true
+	end
+
+	local function resetDefaults()
+		for featureId, keyText in pairs(context.defaultFeatureKeybinds) do
+			context.featureKeybinds[featureId] = keyText
+		end
+		for featureId, modeText in pairs(context.defaultFeatureKeybindModes) do
+			context.featureKeybindModes[featureId] = modeText
+			release(featureId)
+		end
+		context.saveSettings()
+		refreshRows()
+		updateMenu()
+		if context.showToast then
+			context.showToast("Keybinds", "Binds reset to defaults", context.theme.accent)
+		end
+	end
+
+	local function buildRows(parent)
+		local _, headerValue = context.createStatusRow(parent, "BINDS", "PRESS KEY")
+		headerValue.TextColor3 = context.theme.accent
+
+		local _, displayButton = context.createToggleRow(parent, "DISPLAY PANEL", context.config.showKeybindsUi)
+		state.displayButton = displayButton
+		displayButton.MouseButton1Click:Connect(function()
+			context.config.showKeybindsUi = not context.config.showKeybindsUi
+			context.saveSettings()
+			refreshRows()
+			updateMenu()
+		end)
+
+		for _, def in ipairs(featureDefs) do
+			local _, button = context.createKeybindRow(parent, string.upper(def.label), getKeybindText(def.id) or "NONE")
+			state.rows[def.id] = button
+			button.MouseButton1Click:Connect(function()
+				state.listening = state.listening == def.id and nil or def.id
+				refreshRows()
+			end)
+
+			local _, modeButton = context.createCycleRow(parent, string.upper(def.label .. " MODE"), string.upper(getMode(def.id)))
+			state.modeButtons[def.id] = modeButton
+			modeButton.MouseButton1Click:Connect(function()
+				setMode(def.id, cycleMode(getMode(def.id)))
+				context.saveSettings()
+				refreshRows()
+				updateMenu()
+			end)
+		end
+
+		local _, resetButton = context.createCycleRow(parent, "RESET BINDS", "DEFAULTS")
+		resetButton.MouseButton1Click:Connect(resetDefaults)
+
+		refreshRows()
+	end
+
+	local function fireToast(def)
+		if not context.showToast then
+			return
+		end
+
+		local active = isActive(def.id)
+		context.showToast("Keybind", string.format("%s %s", def.label, active and "ON" or "OFF"), active and context.theme.accent or context.theme.muted)
+	end
+
+	local function handleInput(input)
+		if state.listening then
+			if input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then
+				assignKeybind(state.listening, "")
+			else
+				local bindText = inputToBindText(input)
+				if bindText then
+					assignKeybind(state.listening, bindText)
+				end
+			end
+
+			state.listening = nil
+			context.saveSettings()
+			refreshRows()
+			updateMenu()
+			return true
+		end
+
+		if isTyping() then
+			return false
+		end
+
+		for _, def in ipairs(featureDefs) do
+			local bind = getBindForId(def.id)
+			if bind and inputMatchesBind(input, bind) then
+				trigger(def.id)
+				fireToast(def)
+				updateMenu()
+				return true
+			end
+		end
+
+		return false
+	end
+
+	local function handleInputEnded(input)
+		if isTyping() then
+			return
+		end
+
+		for _, def in ipairs(featureDefs) do
+			local bind = getBindForId(def.id)
+			if bind and inputMatchesBind(input, bind) then
+				release(def.id)
+			end
+		end
+
+		updateMenu()
+	end
+
+	buildWatermarkMenu()
+
+	return {
+		buildRows = buildRows,
+		handleInput = handleInput,
+		handleInputEnded = handleInputEnded,
+		update = function()
+			refreshRows()
+			updateMenu()
+		end,
+	}
+end
+]==]
 
 local function canUseFileApi()
 	return type(isfile) == "function" and type(readfile) == "function" and type(writefile) == "function"
+end
+
+local function requireLocalModule(modulePath, fallbackSource)
+	if type(loadstring) ~= "function" then
+		return nil
+	end
+
+	local source = fallbackSource
+	if type(readfile) == "function" then
+		pcall(function()
+			source = readfile(modulePath)
+		end)
+	end
+
+	if type(source) ~= "string" or source == "" then
+		return nil
+	end
+
+	local success, result = pcall(function()
+		local chunk = loadstring(source)
+		return chunk and chunk()
+	end)
+
+	if success then
+		return result
+	end
+
+	return nil
 end
 
 local function loadSettings()
@@ -216,13 +868,33 @@ local function loadSettings()
 	end
 
 	local configSource = decoded
+	local keybindSource = decoded.featureKeybinds
+	local bindModeSource = decoded.featureKeybindModes
 	if decoded.placeConfigs and decoded.placeConfigs[tostring(game.PlaceId)] and decoded.placeConfigs[tostring(game.PlaceId)].settings and decoded.autoLoadGamePreset ~= false then
 		configSource = decoded.placeConfigs[tostring(game.PlaceId)].settings
+		keybindSource = decoded.placeConfigs[tostring(game.PlaceId)].featureKeybinds or keybindSource
+		bindModeSource = decoded.placeConfigs[tostring(game.PlaceId)].featureKeybindModes or bindModeSource
 	end
 
 	for _, key in ipairs(SETTING_KEYS) do
 		if configSource[key] ~= nil then
 			CONFIG[key] = configSource[key]
+		end
+	end
+
+	if type(keybindSource) == "table" then
+		for featureId, keyText in pairs(keybindSource) do
+			if FEATURE_KEYBINDS[featureId] ~= nil and type(keyText) == "string" then
+				FEATURE_KEYBINDS[featureId] = keyText
+			end
+		end
+	end
+
+	if type(bindModeSource) == "table" then
+		for featureId, modeText in pairs(bindModeSource) do
+			if FEATURE_KEYBIND_MODES[featureId] ~= nil and type(modeText) == "string" then
+				FEATURE_KEYBIND_MODES[featureId] = modeText
+			end
 		end
 	end
 
@@ -259,6 +931,15 @@ local function saveSettings()
 		payload[key] = CONFIG[key]
 	end
 
+	payload.featureKeybinds = payload.featureKeybinds or {}
+	for featureId, keyText in pairs(FEATURE_KEYBINDS) do
+		payload.featureKeybinds[featureId] = keyText
+	end
+	payload.featureKeybindModes = payload.featureKeybindModes or {}
+	for featureId, modeText in pairs(FEATURE_KEYBIND_MODES) do
+		payload.featureKeybindModes[featureId] = modeText
+	end
+
 	payload.placeConfigs = payload.placeConfigs or {}
 	payload.placeConfigs[tostring(game.PlaceId)] = {
 		currentPresetIndex = currentPresetIndex,
@@ -267,6 +948,14 @@ local function saveSettings()
 
 	for _, key in ipairs(SETTING_KEYS) do
 		payload.placeConfigs[tostring(game.PlaceId)].settings[key] = CONFIG[key]
+	end
+	payload.placeConfigs[tostring(game.PlaceId)].featureKeybinds = payload.placeConfigs[tostring(game.PlaceId)].featureKeybinds or {}
+	for featureId, keyText in pairs(FEATURE_KEYBINDS) do
+		payload.placeConfigs[tostring(game.PlaceId)].featureKeybinds[featureId] = keyText
+	end
+	payload.placeConfigs[tostring(game.PlaceId)].featureKeybindModes = payload.placeConfigs[tostring(game.PlaceId)].featureKeybindModes or {}
+	for featureId, modeText in pairs(FEATURE_KEYBIND_MODES) do
+		payload.placeConfigs[tostring(game.PlaceId)].featureKeybindModes[featureId] = modeText
 	end
 
 	pcall(function()
@@ -370,27 +1059,28 @@ local watermark = create("Frame", {
 addCorner(watermark, 8)
 addStroke(watermark, THEME.border, 0.25, 1)
 
-local watermarkAccent = create("Frame", {
+addCorner(create("Frame", {
 	BackgroundColor3 = THEME.accent,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 0, 0, 0),
 	Size = UDim2.new(0, 3, 1, 0),
 	ZIndex = 13,
 	Parent = watermark,
-})
-addCorner(watermarkAccent, 8)
+}), 8)
 
-local watermarkLabel = makeLabel(watermark, string.format("%s  v%s", CONFIG.panelTitle, CONFIG.version), 10, THEME.text, Enum.Font.GothamBold)
-watermarkLabel.Position = UDim2.new(0, 12, 0, 0)
-watermarkLabel.Size = UDim2.new(1, -18, 1, 0)
-watermarkLabel.ZIndex = 13
+do
+	local label = makeLabel(watermark, string.format("%s  v%s", CONFIG.panelTitle, CONFIG.version), 10, THEME.text, Enum.Font.GothamBold)
+	label.Position = UDim2.new(0, 12, 0, 0)
+	label.Size = UDim2.new(1, -18, 1, 0)
+	label.ZIndex = 13
+end
 
 local miniHud = create("Frame", {
 	AnchorPoint = Vector2.new(1, 0),
 	BackgroundColor3 = Color3.fromRGB(18, 22, 32),
 	BorderSizePixel = 0,
 	Position = UDim2.new(1, -16, 0, 16),
-	Size = UDim2.new(0, 196, 0, 118),
+	Size = UDim2.new(0, 228, 0, 152),
 	ZIndex = 12,
 	Parent = gui,
 })
@@ -399,65 +1089,114 @@ addStroke(miniHud, THEME.border, 0.25, 1)
 
 create("UIGradient", {
 	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 27, 38)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 18, 26)),
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(26, 30, 42)),
+		ColorSequenceKeypoint.new(0.55, Color3.fromRGB(18, 22, 31)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 15, 22)),
 	}),
 	Rotation = 90,
 	Parent = miniHud,
 })
 
-local miniHudTitle = makeLabel(miniHud, "0xVyrs Live", 11, THEME.text, Enum.Font.GothamBold)
-miniHudTitle.Position = UDim2.new(0, 10, 0, 8)
-miniHudTitle.Size = UDim2.new(1, -20, 0, 14)
-miniHudTitle.ZIndex = 13
+do
+	create("Frame", {
+		BackgroundColor3 = THEME.accent,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 0, 0),
+		Size = UDim2.new(1, 0, 0, 3),
+		ZIndex = 13,
+		Parent = miniHud,
+	})
 
-local miniHudSub = makeLabel(miniHud, "Combat Snapshot", 9, THEME.muted, Enum.Font.GothamMedium)
-miniHudSub.Position = UDim2.new(0, 10, 0, 22)
-miniHudSub.Size = UDim2.new(1, -20, 0, 12)
-miniHudSub.ZIndex = 13
+	local label = makeLabel(miniHud, CONFIG.panelTitle .. " Telemetry", 12, THEME.text, Enum.Font.GothamBold)
+	label.Position = UDim2.new(0, 12, 0, 10)
+	label.Size = UDim2.new(1, -82, 0, 16)
+	label.ZIndex = 13
+end
+
+do
+	local chip = create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = THEME.accentSoft,
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -12, 0, 12),
+		Size = UDim2.new(0, 54, 0, 16),
+		Font = Enum.Font.GothamBold,
+		Text = "LIVE",
+		TextColor3 = THEME.text,
+		TextSize = 8,
+		ZIndex = 13,
+		Parent = miniHud,
+	})
+	addCorner(chip, 999)
+
+	local label = makeLabel(miniHud, "Realtime combat snapshot", 9, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 12, 0, 28)
+	label.Size = UDim2.new(1, -24, 0, 12)
+	label.ZIndex = 13
+
+	create("Frame", {
+		BackgroundColor3 = Color3.fromRGB(44, 49, 64),
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 12, 0, 46),
+		Size = UDim2.new(1, -24, 0, 1),
+		ZIndex = 13,
+		Parent = miniHud,
+	})
+end
 
 local miniHudBody = create("Frame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 10, 0, 42),
-	Size = UDim2.new(1, -20, 0, 64),
+	Position = UDim2.new(0, 12, 0, 56),
+	Size = UDim2.new(1, -24, 0, 82),
 	ZIndex = 13,
 	Parent = miniHud,
 })
 
 create("UIListLayout", {
-	Padding = UDim.new(0, 4),
+	Padding = UDim.new(0, 6),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 	Parent = miniHudBody,
 })
 
 local function createMiniHudRow(title)
 	local row = create("Frame", {
-		BackgroundTransparency = 1,
+		BackgroundColor3 = Color3.fromRGB(22, 27, 37),
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
-		Size = UDim2.new(1, 0, 0, 15),
+		Size = UDim2.new(1, 0, 0, 16),
 		ZIndex = 13,
 		Parent = miniHudBody,
 	})
+	addCorner(row, 6)
 
-	local left = makeLabel(row, title, 9, THEME.muted, Enum.Font.GothamBold)
-	left.Size = UDim2.new(0.39, 0, 1, 0)
-	left.ZIndex = 13
+	local left = makeLabel(row, title, 8, THEME.muted, Enum.Font.GothamBold)
+	left.Position = UDim2.new(0, 8, 0, 0)
+	left.Size = UDim2.new(0.36, 0, 1, 0)
+	left.ZIndex = 14
 
-	local right = makeLabel(row, "--", 8, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-	right.AnchorPoint = Vector2.new(1, 0)
-	right.Position = UDim2.new(1, 0, 0, 0)
-	right.Size = UDim2.new(0.61, 0, 1, 0)
-	right.ZIndex = 13
+	local valueCard = create("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		BackgroundColor3 = Color3.fromRGB(34, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -6, 0.5, 0),
+		Size = UDim2.new(0.6, 0, 0, 12),
+		ZIndex = 14,
+		Parent = row,
+	})
+	addCorner(valueCard, 999)
+
+	local right = makeLabel(valueCard, "--", 8, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	right.Size = UDim2.new(1, 0, 1, 0)
+	right.ZIndex = 15
 
 	return right
 end
 
 miniHudLabels.status = createMiniHudRow("STATUS")
-miniHudLabels.fps = createMiniHudRow("FPS")
-miniHudLabels.targets = createMiniHudRow("TARGETS")
-miniHudLabels.focus = createMiniHudRow("FOCUS")
+miniHudLabels.fps = createMiniHudRow("REFRESH")
+miniHudLabels.targets = createMiniHudRow("CONTACTS")
+miniHudLabels.focus = createMiniHudRow("LOCK")
 miniHud.Visible = CONFIG.showMiniHud
 
 toastLayer = create("Frame", {
@@ -635,7 +1374,8 @@ miniHudLabels.utility.showKillText = function(text)
 	end)
 end
 
-local introOverlay = create("Frame", {
+local intro = {}
+intro.overlay = create("Frame", {
 	BackgroundColor3 = Color3.fromRGB(10, 12, 18),
 	BackgroundTransparency = 0.08,
 	BorderSizePixel = 0,
@@ -644,50 +1384,71 @@ local introOverlay = create("Frame", {
 	Parent = gui,
 })
 
-local introCard = create("Frame", {
+intro.card = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	BackgroundColor3 = Color3.fromRGB(18, 22, 32),
 	BorderSizePixel = 0,
 	Position = UDim2.new(0.5, 0, 0.5, 20),
 	Size = UDim2.new(0, 0, 0, 0),
 	ZIndex = 21,
-	Parent = introOverlay,
+	Parent = intro.overlay,
 })
-addCorner(introCard, 16)
-addStroke(introCard, THEME.border, 0.2, 1)
+addCorner(intro.card, 16)
+addStroke(intro.card, THEME.border, 0.2, 1)
 
-local introGlow = create("Frame", {
+intro.ring = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = THEME.accent,
-	BackgroundTransparency = 0.9,
+	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(1.25, 0, 1.35, 0),
+	Size = UDim2.new(0, 120, 0, 120),
 	ZIndex = 20,
-	Parent = introCard,
+	Parent = intro.overlay,
 })
-addCorner(introGlow, 999)
+addCorner(intro.ring, 999)
+addStroke(intro.ring, THEME.accent, 0.15, 2)
 
-local introKicker = makeLabel(introCard, "SYSTEM ONLINE", 10, THEME.accent, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-introKicker.AnchorPoint = Vector2.new(0.5, 0)
-introKicker.Position = UDim2.new(0.5, 0, 0, 18)
-introKicker.Size = UDim2.new(1, -30, 0, 16)
-introKicker.TextTransparency = 1
-introKicker.ZIndex = 22
+intro.glow = create("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = THEME.accent,
+	BackgroundTransparency = 0.84,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0.5, 0, 0.5, 0),
+	Size = UDim2.new(1.28, 0, 1.4, 0),
+	ZIndex = 20,
+	Parent = intro.card,
+})
+addCorner(intro.glow, 999)
 
-local introTitle = makeLabel(introCard, "Welcome to 0xVyrs ESP Suite", 20, THEME.text, Enum.Font.GothamBlack, Enum.TextXAlignment.Center)
-introTitle.AnchorPoint = Vector2.new(0.5, 0.5)
-introTitle.Position = UDim2.new(0.5, 0, 0.5, -2)
-introTitle.Size = UDim2.new(1, -30, 0, 30)
-introTitle.TextTransparency = 1
-introTitle.ZIndex = 22
+intro.sound = create("Sound", {
+	Name = "IntroHit",
+	SoundId = "rbxassetid://1839701476",
+	Volume = 2.2,
+	PlaybackSpeed = 1,
+	RollOffMaxDistance = 100,
+	Parent = gui,
+})
 
-local introSub = makeLabel(introCard, "Adaptive overlays primed", 11, THEME.muted, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
-introSub.AnchorPoint = Vector2.new(0.5, 1)
-introSub.Position = UDim2.new(0.5, 0, 1, -18)
-introSub.Size = UDim2.new(1, -30, 0, 16)
-introSub.TextTransparency = 1
-introSub.ZIndex = 22
+intro.kicker = makeLabel(intro.card, "SYSTEM ONLINE", 10, THEME.accent, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+intro.kicker.AnchorPoint = Vector2.new(0.5, 0)
+intro.kicker.Position = UDim2.new(0.5, 0, 0, 18)
+intro.kicker.Size = UDim2.new(1, -30, 0, 16)
+intro.kicker.TextTransparency = 1
+intro.kicker.ZIndex = 22
+
+intro.title = makeLabel(intro.card, "Welcome to 0xVyrs ESP Suite", 20, THEME.text, Enum.Font.GothamBlack, Enum.TextXAlignment.Center)
+intro.title.AnchorPoint = Vector2.new(0.5, 0.5)
+intro.title.Position = UDim2.new(0.5, 0, 0.5, -2)
+intro.title.Size = UDim2.new(1, -30, 0, 30)
+intro.title.TextTransparency = 1
+intro.title.ZIndex = 22
+
+intro.sub = makeLabel(intro.card, "Adaptive overlays primed", 11, THEME.muted, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+intro.sub.AnchorPoint = Vector2.new(0.5, 1)
+intro.sub.Position = UDim2.new(0.5, 0, 1, -18)
+intro.sub.Size = UDim2.new(1, -30, 0, 16)
+intro.sub.TextTransparency = 1
+intro.sub.ZIndex = 22
 
 local window = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
@@ -869,6 +1630,7 @@ SETTING_KEYS = {
 	"boxMode",
 	"compactMode",
 	"showMiniHud",
+	"showKeybindsUi",
 	"showLookDirection",
 	"antiAfk",
 	"autoLoadGamePreset",
@@ -902,16 +1664,17 @@ create("UIGradient", {
 	Parent = window,
 })
 
-local topBar = create("Frame", {
+local chrome = {}
+chrome.topBar = create("Frame", {
 	BackgroundColor3 = THEME.header,
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
 	Size = UDim2.new(1, 0, 0, 108),
 	Parent = window,
 })
-addCorner(topBar, 9)
+addCorner(chrome.topBar, 9)
 
-local minimizeButton = create("TextButton", {
+chrome.minimizeButton = create("TextButton", {
 	AnchorPoint = Vector2.new(1, 0),
 	AutoButtonColor = false,
 	BackgroundColor3 = Color3.fromRGB(42, 47, 61),
@@ -923,68 +1686,68 @@ local minimizeButton = create("TextButton", {
 	TextColor3 = THEME.text,
 	TextSize = 16,
 	ZIndex = 6,
-	Parent = topBar,
+	Parent = chrome.topBar,
 })
-addCorner(minimizeButton, 4)
-addStroke(minimizeButton, THEME.border, 0.25, 1)
+addCorner(chrome.minimizeButton, 4)
+addStroke(chrome.minimizeButton, THEME.border, 0.25, 1)
 
 create("Frame", {
 	BackgroundColor3 = Color3.fromRGB(56, 62, 78),
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 0, 1, -1),
 	Size = UDim2.new(1, 0, 0, 1),
-	Parent = topBar,
+	Parent = chrome.topBar,
 })
 
-local glow = create("Frame", {
+chrome.glow = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0),
 	BackgroundColor3 = THEME.accent,
 	BackgroundTransparency = 0.9,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0.58, 0, 0, -28),
 	Size = UDim2.new(0.95, 0, 0, 140),
-	Parent = topBar,
+	Parent = chrome.topBar,
 })
-addCorner(glow, 120)
+addCorner(chrome.glow, 120)
 
-local brand = create("Frame", {
+chrome.brand = create("Frame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 12, 0, 12),
 	Size = UDim2.new(0, 186, 0, 42),
-	Parent = topBar,
+	Parent = chrome.topBar,
 })
 
-local brandKicker = makeLabel(brand, "TACTICAL ESP SUITE", 9, THEME.accent, Enum.Font.GothamBold)
-brandKicker.Size = UDim2.new(1, 0, 0, 12)
+chrome.brandKicker = makeLabel(chrome.brand, "TACTICAL ESP SUITE", 9, THEME.accent, Enum.Font.GothamBold)
+chrome.brandKicker.Size = UDim2.new(1, 0, 0, 12)
 
-local brandTitle = makeLabel(brand, CONFIG.panelTitle, 21, THEME.text, Enum.Font.GothamBlack)
-brandTitle.AutomaticSize = Enum.AutomaticSize.X
-brandTitle.Position = UDim2.new(0, 0, 0, 9)
-brandTitle.Size = UDim2.new(0, 0, 0, 20)
+chrome.brandTitle = makeLabel(chrome.brand, CONFIG.panelTitle, 21, THEME.text, Enum.Font.GothamBlack)
+chrome.brandTitle.AutomaticSize = Enum.AutomaticSize.X
+chrome.brandTitle.Position = UDim2.new(0, 0, 0, 9)
+chrome.brandTitle.Size = UDim2.new(0, 0, 0, 20)
 
-local brandSub = makeLabel(brand, "Adaptive overlays and combat info", 9, THEME.muted, Enum.Font.GothamMedium)
-brandSub.Position = UDim2.new(0, 1, 0, 32)
-brandSub.Size = UDim2.new(0, 186, 0, 12)
+chrome.brandSub = makeLabel(chrome.brand, "Adaptive overlays and combat info", 9, THEME.muted, Enum.Font.GothamMedium)
+chrome.brandSub.Position = UDim2.new(0, 1, 0, 32)
+chrome.brandSub.Size = UDim2.new(0, 186, 0, 12)
 
-local infoPanel = create("Frame", {
+chrome.infoPanel = create("Frame", {
 	AnchorPoint = Vector2.new(1, 0),
 	BackgroundColor3 = Color3.fromRGB(33, 37, 49),
 	BorderSizePixel = 0,
 	Position = UDim2.new(1, -42, 0, 12),
 	Size = UDim2.new(0, 138, 0, 58),
-	Parent = topBar,
+	Parent = chrome.topBar,
 })
-addCorner(infoPanel, 8)
-addStroke(infoPanel, THEME.border, 0.35, 1)
+addCorner(chrome.infoPanel, 8)
+addStroke(chrome.infoPanel, THEME.border, 0.35, 1)
 
-local infoContent = create("Frame", {
+chrome.infoContent = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0.5, 0, 0.5, 0),
 	Size = UDim2.new(1, -10, 0, 48),
-	Parent = infoPanel,
+	Parent = chrome.infoPanel,
 })
 
 local function createInfoRow(parent, y, title, value)
@@ -1017,15 +1780,15 @@ local function createInfoRow(parent, y, title, value)
 	return valueLabel
 end
 
-createInfoRow(infoContent, 1, "PLAYER", LOCAL_PLAYER and LOCAL_PLAYER.Name or "Player")
-createInfoRow(infoContent, 25, "VERSION", CONFIG.version)
+createInfoRow(chrome.infoContent, 1, "PLAYER", LOCAL_PLAYER and LOCAL_PLAYER.Name or "Player")
+createInfoRow(chrome.infoContent, 25, "VERSION", CONFIG.version)
 
 local tabBar = create("Frame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 12, 0, 78),
 	Size = UDim2.new(1, -24, 0, 18),
-	Parent = topBar,
+	Parent = chrome.topBar,
 })
 
 create("UIListLayout", {
@@ -1085,6 +1848,7 @@ end
 
 local pages = {
 	control = createPage(),
+	keybinds = createPage(),
 	display = createPage(),
 	combat = createPage(),
 	view = createPage(),
@@ -1212,6 +1976,30 @@ local function createToggleRow(parent, labelText, defaultState)
 	})
 	addCorner(button, 999)
 	addStroke(button, THEME.accent, defaultState and 0.15 or 0.65, 1)
+	return row, button
+end
+
+local function createKeybindRow(parent, labelText, valueText)
+	local row = createRow(parent, 30)
+	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 10, 0, 0)
+	label.Size = UDim2.new(0, 170, 1, 0)
+
+	local button = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -10, 0.5, 0),
+		Size = UDim2.new(0, 72, 0, 20),
+		Font = Enum.Font.GothamBold,
+		Text = valueText,
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(button, 999)
+	addStroke(button, THEME.accent, 0.55, 1)
 	return row, button
 end
 
@@ -1592,6 +2380,7 @@ do
 	for _, item in ipairs({
 		{ key = "general", label = "GENERAL", width = 86 },
 		{ key = "utility", label = "UTILITY", width = 78 },
+		{ key = "keybinds", label = "KEYBINDS", width = 84 },
 	}) do
 		miniHudLabels.utility.controlTabs[item.key] = create("TextButton", {
 			AutoButtonColor = false,
@@ -1622,7 +2411,7 @@ do
 		Parent = body,
 	})
 
-	for _, item in ipairs({ "general", "utility" }) do
+	for _, item in ipairs({ "general", "utility", "keybinds" }) do
 		miniHudLabels.utility.controlTabs[item .. "Page"] = create("Frame", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
@@ -1640,7 +2429,7 @@ do
 	end
 
 	miniHudLabels.utility.setControlTab = function(tabName)
-		for _, item in ipairs({ "general", "utility" }) do
+		for _, item in ipairs({ "general", "utility", "keybinds" }) do
 			local selected = item == tabName
 			miniHudLabels.utility.controlTabs[item].BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
 			miniHudLabels.utility.controlTabs[item].TextColor3 = selected and THEME.text or THEME.muted
@@ -1658,6 +2447,10 @@ do
 
 	miniHudLabels.utility.controlTabs.utility.MouseButton1Click:Connect(function()
 		miniHudLabels.utility.setControlTab("utility")
+	end)
+
+	miniHudLabels.utility.controlTabs.keybinds.MouseButton1Click:Connect(function()
+		miniHudLabels.utility.setControlTab("keybinds")
 	end)
 end
 
@@ -2000,28 +2793,38 @@ do
 	local row = createRow(pages.combat, 76)
 	row.BackgroundColor3 = THEME.panelAlt
 	tracerSliders.targetCard = row
+	row.AnchorPoint = Vector2.new(1, 0)
+	row.Position = UDim2.new(1, -16, 0, 176)
+	row.Size = UDim2.new(0, 228, 0, 76)
+	row.Visible = false
+	row.ZIndex = 12
+	row.Parent = gui
 
 	local label = makeLabel(row, "TARGET", 9, THEME.muted, Enum.Font.GothamBold)
 	label.Position = UDim2.new(0, 10, 0, 6)
 	label.Size = UDim2.new(0, 70, 0, 10)
+	label.ZIndex = 13
 
 	tracerSliders.targetInfo = makeLabel(row, "NONE", 12, THEME.text, Enum.Font.GothamBold)
 	tracerSliders.targetInfo.Position = UDim2.new(0, 10, 0, 18)
 	tracerSliders.targetInfo.Size = UDim2.new(1, -20, 0, 14)
 	tracerSliders.targetInfo.TextXAlignment = Enum.TextXAlignment.Left
 	tracerSliders.targetInfo.TextTruncate = Enum.TextTruncate.AtEnd
+	tracerSliders.targetInfo.ZIndex = 13
 
 	tracerSliders.targetInfoMeta = makeLabel(row, "No focus target", 9, THEME.muted, Enum.Font.GothamMedium)
 	tracerSliders.targetInfoMeta.Position = UDim2.new(0, 10, 0, 36)
 	tracerSliders.targetInfoMeta.Size = UDim2.new(1, -20, 0, 10)
 	tracerSliders.targetInfoMeta.TextXAlignment = Enum.TextXAlignment.Left
 	tracerSliders.targetInfoMeta.TextTruncate = Enum.TextTruncate.AtEnd
+	tracerSliders.targetInfoMeta.ZIndex = 13
 
 	tracerSliders.targetInfoMeta2 = makeLabel(row, "--", 9, THEME.muted, Enum.Font.GothamMedium)
 	tracerSliders.targetInfoMeta2.Position = UDim2.new(0, 10, 0, 50)
 	tracerSliders.targetInfoMeta2.Size = UDim2.new(1, -20, 0, 10)
 	tracerSliders.targetInfoMeta2.TextXAlignment = Enum.TextXAlignment.Left
 	tracerSliders.targetInfoMeta2.TextTruncate = Enum.TextTruncate.AtEnd
+	tracerSliders.targetInfoMeta2.ZIndex = 13
 
 	tracerSliders.targetBadge = create("TextLabel", {
 		AnchorPoint = Vector2.new(1, 0),
@@ -2033,6 +2836,7 @@ do
 		Text = "NO LOCK",
 		TextColor3 = THEME.muted,
 		TextSize = 8,
+		ZIndex = 13,
 		Parent = row,
 	})
 	addCorner(tracerSliders.targetBadge, 999)
@@ -2057,7 +2861,6 @@ tracerSliders.crosshairGap = createSliderRow(pages.combat, "CROSSHAIR GAP", CONF
 tracerSliders.fovCircleToggle = select(2, createToggleRow(pages.combat, "FOV CIRCLE VISIBLE", CONFIG.showFovCircle))
 
 do
-	tracerSliders.targetCard.Parent = tracerSliders.tabs.targetingPage
 	tracerSliders.focusLock.Parent.Parent = tracerSliders.tabs.targetingPage
 	tracerSliders.threatMode.Parent.Parent = tracerSliders.tabs.targetingPage
 	tracerSliders.maxDistance.bar.Parent.Parent = tracerSliders.tabs.targetingPage
@@ -2584,6 +3387,9 @@ local function toggleFreeCam()
 
 	updateViewUi()
 	updateMouseIconVisibility()
+	if keybindController then
+		keybindController.update()
+	end
 	showToast("View", viewState.freeCamEnabled and "Free Cam enabled" or "Free Cam disabled", viewState.freeCamEnabled and THEME.accent or THEME.muted)
 end
 
@@ -3753,7 +4559,13 @@ local function updatePerfStatsUi()
 	end
 
 	if tracerSliders.targetInfo then
-		tracerSliders.targetCard.Visible = CONFIG.showTargetCard
+		local targetCardHeight = CONFIG.targetCardCompact and 58 or 76
+		if tracerSliders.targetCard then
+			local anchorYOffset = (miniHud.Visible and miniHud.AbsoluteSize.Y or 0) + 12
+			tracerSliders.targetCard.Position = UDim2.new(1, -16, 0, 16 + anchorYOffset)
+			tracerSliders.targetCard.Size = UDim2.new(0, 228, 0, targetCardHeight)
+			tracerSliders.targetCard.Visible = gui.Enabled and CONFIG.showTargetCard
+		end
 		if focusedPlayer and CONFIG.showTargetCard then
 			local character = focusedPlayer.Character
 			local root = character and getCharacterRoot(character)
@@ -3810,7 +4622,6 @@ local function updatePerfStatsUi()
 				tracerSliders.targetBadge.TextColor3 = telemetry.aimingAtYou and THEME.focus or THEME.text
 				tracerSliders.targetBadge.BackgroundColor3 = telemetry.aimingAtYou and Color3.fromRGB(86, 71, 28) or Color3.fromRGB(35, 40, 53)
 			end
-			tracerSliders.targetCard.Size = CONFIG.targetCardCompact and UDim2.new(1, 0, 0, 58) or UDim2.new(1, 0, 0, 76)
 			if tracerSliders.targetInfoMeta2 then
 				tracerSliders.targetInfoMeta2.Visible = not CONFIG.targetCardCompact
 			end
@@ -3830,9 +4641,6 @@ local function updatePerfStatsUi()
 				tracerSliders.targetBadge.Text = "NO LOCK"
 				tracerSliders.targetBadge.TextColor3 = THEME.muted
 				tracerSliders.targetBadge.BackgroundColor3 = Color3.fromRGB(35, 40, 53)
-			end
-			if tracerSliders.targetCard then
-				tracerSliders.targetCard.Size = CONFIG.targetCardCompact and UDim2.new(1, 0, 0, 58) or UDim2.new(1, 0, 0, 76)
 			end
 		end
 	end
@@ -3991,47 +4799,59 @@ end
 
 local function bindToggle(button, configKey)
 	button.MouseButton1Click:Connect(function()
-		CONFIG[configKey] = not CONFIG[configKey]
-
-		if configKey == "performanceMode" and not CONFIG[configKey] then
-			CONFIG.simplifyMaterials = false
-			CONFIG.hideTextures = false
-			CONFIG.hideEffects = false
-			CONFIG.disableShadows = false
-		end
-
-		if configKey == "performanceMode" or configKey == "simplifyMaterials" or configKey == "hideTextures" or configKey == "hideEffects" or configKey == "disableShadows" then
-			if configKey ~= "performanceMode" and not CONFIG[configKey] then
-				CONFIG.performanceMode = false
-			end
-
-			applyPerformanceSettings()
-			if syncUiFromConfig then
-				syncUiFromConfig()
-			end
-		end
-
-		setToggleState(button, CONFIG[configKey])
-
-		if configKey == "showMiniHud" then
-			miniHud.Visible = CONFIG.showMiniHud and window.Visible
-		elseif configKey == "showCrosshair" then
-			if CONFIG.showCrosshair then
-				updateCrosshair()
-			else
-				hideCrosshair()
-			end
-		elseif configKey == "removeZoomLimit" then
-			applyZoomLimitSetting()
-		elseif configKey == "antiAfk" then
-			miniHudLabels.utility.applyAntiAfk()
-		end
-
-		refreshAllEsp()
-		saveSettings()
-		updateMouseIconVisibility()
-		showToast("Setting Updated", string.format("%s %s", formatSettingName(configKey), CONFIG[configKey] and "enabled" or "disabled"), CONFIG[configKey] and THEME.accent or THEME.muted)
+		applyConfigToggleState(configKey, not CONFIG[configKey])
 	end)
+end
+
+applyConfigToggleState = function(configKey, nextState, suppressToast)
+	CONFIG[configKey] = nextState
+
+	if configKey == "performanceMode" and not CONFIG[configKey] then
+		CONFIG.simplifyMaterials = false
+		CONFIG.hideTextures = false
+		CONFIG.hideEffects = false
+		CONFIG.disableShadows = false
+	end
+
+	if configKey == "performanceMode" or configKey == "simplifyMaterials" or configKey == "hideTextures" or configKey == "hideEffects" or configKey == "disableShadows" then
+		if configKey ~= "performanceMode" and not CONFIG[configKey] then
+			CONFIG.performanceMode = false
+		end
+
+		applyPerformanceSettings()
+		if syncUiFromConfig then
+			syncUiFromConfig()
+		end
+	end
+
+	if keybindState.toggleButtonsByConfig[configKey] then
+		setToggleState(keybindState.toggleButtonsByConfig[configKey], CONFIG[configKey])
+	end
+
+	if configKey == "showMiniHud" then
+		miniHud.Visible = CONFIG.showMiniHud and window.Visible
+	elseif configKey == "showCrosshair" then
+		if CONFIG.showCrosshair then
+			updateCrosshair()
+		else
+			hideCrosshair()
+		end
+	elseif configKey == "removeZoomLimit" then
+		applyZoomLimitSetting()
+	elseif configKey == "antiAfk" then
+		miniHudLabels.utility.applyAntiAfk()
+	end
+
+	refreshAllEsp()
+	saveSettings()
+	updateMouseIconVisibility()
+	if keybindController then
+		keybindController.update()
+	end
+
+	if not suppressToast then
+		showToast("Setting Updated", string.format("%s %s", formatSettingName(configKey), CONFIG[configKey] and "enabled" or "disabled"), CONFIG[configKey] and THEME.accent or THEME.muted)
+	end
 end
 
 local function setEspEnabled(state)
@@ -4043,22 +4863,25 @@ local function setEspEnabled(state)
 		clearAllEsp()
 	end
 	saveSettings()
+	if keybindController then
+		keybindController.update()
+	end
 	showToast("ESP", state and "ESP enabled" or "ESP disabled", state and THEME.accent or THEME.muted)
 end
 
 local function applyCompactMode(state)
 	CONFIG.compactMode = state
-	infoPanel.Visible = not state
-	brandSub.Visible = not state
-	topBar.Size = state and UDim2.new(1, 0, 0, 82) or UDim2.new(1, 0, 0, 108)
+	chrome.infoPanel.Visible = not state
+	chrome.brandSub.Visible = not state
+	chrome.topBar.Size = state and UDim2.new(1, 0, 0, 82) or UDim2.new(1, 0, 0, 108)
 	tabBar.Position = state and UDim2.new(0, 12, 0, 50) or UDim2.new(0, 12, 0, 78)
 	content.Position = state and UDim2.new(0, 0, 0, 82) or UDim2.new(0, 0, 0, 108)
 	content.Size = state and UDim2.new(1, 0, 1, -82) or UDim2.new(1, 0, 1, -108)
-	brand.Size = state and UDim2.new(0, 170, 0, 28) or UDim2.new(0, 186, 0, 42)
-	brandTitle.TextSize = state and 19 or 21
-	brandTitle.Position = state and UDim2.new(0, 0, 0, 8) or UDim2.new(0, 0, 0, 9)
-	brandKicker.Visible = not state
-	glow.Visible = not state
+	chrome.brand.Size = state and UDim2.new(0, 170, 0, 28) or UDim2.new(0, 186, 0, 42)
+	chrome.brandTitle.TextSize = state and 19 or 21
+	chrome.brandTitle.Position = state and UDim2.new(0, 0, 0, 8) or UDim2.new(0, 0, 0, 9)
+	chrome.brandKicker.Visible = not state
+	chrome.glow.Visible = not state
 	saveSettings()
 end
 
@@ -4070,61 +4893,80 @@ local function setMinimized(state)
 	else
 		window.Size = state and minimizedWindowSize or expandedWindowSize
 	end
-	minimizeButton.Text = state and "+" or "-"
+	chrome.minimizeButton.Text = state and "+" or "-"
 end
 
 local function playIntroAnimation()
-	local cardIn = TweenService:Create(introCard, TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		Size = UDim2.new(0, 360, 0, 126),
+	pcall(function()
+		intro.sound.TimePosition = 0
+		intro.sound:Play()
+	end)
+
+	local ringIn = TweenService:Create(intro.ring, TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 250, 0, 250),
+		BackgroundTransparency = 1,
+	})
+	local cardIn = TweenService:Create(intro.card, TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 368, 0, 128),
 		Position = UDim2.new(0.5, 0, 0.5, 0),
 	})
-	local glowIn = TweenService:Create(introGlow, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.94,
+	local glowIn = TweenService:Create(intro.glow, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		BackgroundTransparency = 0.92,
 	})
-	local kickerIn = TweenService:Create(introKicker, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	local kickerIn = TweenService:Create(intro.kicker, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		TextTransparency = 0,
 	})
-	local titleIn = TweenService:Create(introTitle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	local titleIn = TweenService:Create(intro.title, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		TextTransparency = 0,
 	})
-	local subIn = TweenService:Create(introSub, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	local subIn = TweenService:Create(intro.sub, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		TextTransparency = 0,
+	})
+	local cardSettle = TweenService:Create(intro.card, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 356, 0, 124),
+		Position = UDim2.new(0.5, 0, 0.5, -2),
 	})
 
+	ringIn:Play()
 	cardIn:Play()
 	glowIn:Play()
 	cardIn.Completed:Wait()
+	cardSettle:Play()
 	kickerIn:Play()
 	titleIn:Play()
 	subIn:Play()
 
-	task.wait(1.2)
+	task.wait(1.35)
 
 	local fadeInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-	TweenService:Create(introOverlay, fadeInfo, {
+	TweenService:Create(intro.overlay, fadeInfo, {
 		BackgroundTransparency = 1,
 	}):Play()
-	TweenService:Create(introCard, fadeInfo, {
+	TweenService:Create(intro.card, fadeInfo, {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 320, 0, 110),
+		Size = UDim2.new(0, 320, 0, 112),
 		Position = UDim2.new(0.5, 0, 0.5, -8),
 	}):Play()
-	TweenService:Create(introGlow, fadeInfo, {
+	TweenService:Create(intro.glow, fadeInfo, {
 		BackgroundTransparency = 1,
 	}):Play()
-	TweenService:Create(introKicker, fadeInfo, {
+	TweenService:Create(intro.ring, fadeInfo, {
+		Size = UDim2.new(0, 340, 0, 340),
+		BackgroundTransparency = 1,
+	}):Play()
+	TweenService:Create(intro.kicker, fadeInfo, {
 		TextTransparency = 1,
 	}):Play()
-	TweenService:Create(introTitle, fadeInfo, {
+	TweenService:Create(intro.title, fadeInfo, {
 		TextTransparency = 1,
 	}):Play()
-	TweenService:Create(introSub, fadeInfo, {
+	TweenService:Create(intro.sub, fadeInfo, {
 		TextTransparency = 1,
 	}):Play()
 
 	task.delay(0.45, function()
-		if introOverlay then
-			introOverlay:Destroy()
+		if intro.overlay then
+			intro.overlay:Destroy()
 		end
 	end)
 
@@ -4142,6 +4984,9 @@ local function playIntroAnimation()
 	setMinimized(false)
 	refreshAllEsp()
 	updateMouseIconVisibility()
+	if keybindController then
+		keybindController.update()
+	end
 end
 
 createTabButton("control", "CONTROL").MouseButton1Click:Connect(function()
@@ -4191,6 +5036,71 @@ bindToggle(performanceToggles.materials, "simplifyMaterials")
 bindToggle(performanceToggles.textures, "hideTextures")
 bindToggle(performanceToggles.effects, "hideEffects")
 bindToggle(performanceToggles.shadows, "disableShadows")
+
+for configKey, button in pairs({
+	enabled = enabledToggle,
+	showNames = displayToggles.names,
+	showDistance = displayToggles.distance,
+	distanceFade = displayToggles.fade,
+	showHealth = displayToggles.health,
+	showWeapon = displayToggles.weapon,
+	showSkeleton = displayToggles.skeleton,
+	showHeadDot = displayToggles.headDot,
+	showFocusTarget = displayToggles.focus,
+	showBoxes = displayToggles.boxes,
+	showTargetCard = displayToggles.targetCard,
+	targetCardCompact = displayToggles.targetCardCompact,
+	visibilityCheck = tracerSliders.visibilityToggle,
+	showTracers = tracerSliders.tracersToggle,
+	focusLock = tracerSliders.focusLock,
+	showLookDirection = tracerSliders.lookDirectionToggle,
+	showCrosshair = tracerSliders.crosshairToggle,
+	showFovCircle = tracerSliders.fovCircleToggle,
+	showMiniHud = miniHudToggle,
+	removeZoomLimit = viewButtons.removeZoomLimit,
+	antiAfk = miniHudLabels.utility.antiAfk,
+	autoLoadGamePreset = miniHudLabels.utility.autoLoadGamePreset,
+	performanceMode = performanceToggles.mode,
+	simplifyMaterials = performanceToggles.materials,
+	hideTextures = performanceToggles.textures,
+	hideEffects = performanceToggles.effects,
+	disableShadows = performanceToggles.shadows,
+}) do
+	keybindState.toggleButtonsByConfig[configKey] = button
+end
+
+do
+	local keybindFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\keybinds.lua", KEYBINDS_MODULE_SOURCE)
+	if type(keybindFactory) == "function" then
+		keybindController = keybindFactory({
+			addCorner = addCorner,
+			addStroke = addStroke,
+			applyConfigToggleState = applyConfigToggleState,
+			config = CONFIG,
+			create = create,
+			createCycleRow = createCycleRow,
+			createKeybindRow = createKeybindRow,
+			createStatusRow = createStatusRow,
+			createToggleRow = createToggleRow,
+			defaultFeatureKeybindModes = DEFAULT_FEATURE_KEYBIND_MODES,
+			defaultFeatureKeybinds = DEFAULT_FEATURE_KEYBINDS,
+			featureKeybindModes = FEATURE_KEYBIND_MODES,
+			featureKeybinds = FEATURE_KEYBINDS,
+			gui = gui,
+			keyCodeToText = keyCodeToText,
+			keyTextToKeyCode = keyTextToKeyCode,
+			makeLabel = makeLabel,
+			saveSettings = saveSettings,
+			setToggleState = setToggleState,
+			showToast = showToast,
+			theme = THEME,
+			toggleFreeCam = toggleFreeCam,
+			userInputService = UserInputService,
+			viewState = viewState,
+		})
+		keybindController.buildRows(miniHudLabels.utility.controlTabs.keybindsPage)
+	end
+end
 
 compactToggle.MouseButton1Click:Connect(function()
 	applyCompactMode(not CONFIG.compactMode)
@@ -4798,7 +5708,7 @@ miniHudLabels.utility.tools.MouseButton1Click:Connect(function()
 	showToast("Player Utility", "Tools reset", THEME.accent)
 end)
 
-minimizeButton.MouseButton1Click:Connect(function()
+chrome.minimizeButton.MouseButton1Click:Connect(function()
 	setMinimized(not uiMinimized)
 end)
 
@@ -5124,6 +6034,10 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 
+	if keybindController and keybindController.handleInput(input) then
+		return
+	end
+
 	if viewState.freeCamEnabled then
 		if input.UserInputType == Enum.UserInputType.MouseButton2 then
 			viewState.lookHeld = true
@@ -5155,6 +6069,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		if not gui.Enabled then
 			hideCrosshair()
 		end
+		if keybindController then
+			keybindController.update()
+		end
 		updateMouseIconVisibility()
 	elseif input.KeyCode == CONFIG.espToggleKey then
 		setEspEnabled(not CONFIG.enabled)
@@ -5162,6 +6079,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		setEspEnabled(false)
 		gui.Enabled = false
 		hideCrosshair()
+		if keybindController then
+			keybindController.update()
+		end
 		updateMouseIconVisibility()
 	end
 end)
@@ -5169,6 +6089,10 @@ end)
 UserInputService.InputEnded:Connect(function(input)
 	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
+	end
+
+	if keybindController and keybindController.handleInputEnded then
+		keybindController.handleInputEnded(input)
 	end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
