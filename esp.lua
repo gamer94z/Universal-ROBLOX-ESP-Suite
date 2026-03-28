@@ -49,9 +49,16 @@ local CONFIG = {
 	cameraFov = 70,
 	freeCamSpeed = 72,
 	removeZoomLimit = false,
+	walkSpeedEnabled = false,
+	walkSpeed = 24,
+	noclip = false,
+	fly = false,
+	flySpeed = 72,
+	clickTeleport = false,
 	boxMode = "Highlight",
-	compactMode = false,
+	minimalMode = false,
 	showMiniHud = true,
+	keybindsEnabled = true,
 	showKeybindsUi = true,
 	showLookDirection = true,
 	antiAfk = false,
@@ -75,9 +82,15 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.3.4",
+	version = "1.3.5",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
+	miniHudOffsetX = -1,
+	miniHudOffsetY = 16,
+	keybindPanelOffsetX = 16,
+	keybindPanelOffsetY = 98,
+	targetCardOffsetX = -1,
+	targetCardOffsetY = -1,
 	uiToggleKey = Enum.KeyCode.RightShift,
 	quickHideKey = Enum.KeyCode.K,
 	espToggleKey = Enum.KeyCode.F4,
@@ -254,15 +267,34 @@ local DEV_TAG_TEXT = "0xVyrs [DEV]"
 local DEV_TAG_DISTANCE = 125
 local DEFAULT_FOV_RADIUS = 60
 local DEFAULT_CAMERA_FOV = 70
+local FLY_ACCELERATION = 10
+local FLY_DECELERATION = 14
+local FLY_PRECISION_MULTIPLIER = 0.35
+local FLY_BOOST_MULTIPLIER = 1.75
+local NON_PERSISTENT_CONFIG_KEYS = {
+	walkSpeedEnabled = true,
+	walkSpeed = true,
+	noclip = true,
+	fly = true,
+	flySpeed = true,
+	clickTeleport = true,
+	performanceMode = true,
+	simplifyMaterials = true,
+	hideTextures = true,
+	hideEffects = true,
+	disableShadows = true,
+}
 local visibleEnemyCount = 0
 local PRESETS
 local currentPresetIndex = 2
 local SETTING_KEYS
 local toastLayer
+local uiReady = false
 local syncUiFromConfig
 local getCharacterRoot
 local applyConfigToggleState
 local keybindController
+local overlayTools
 local keybindState = {
 	toggleButtonsByConfig = {},
 }
@@ -271,12 +303,12 @@ return function(context)
 	local featureDefs = {
 		{ id = "freeCam", label = "Free Cam" },
 		{ id = "focusLock", label = "Focus Lock" },
-		{ id = "showTracers", label = "Tracers" },
-		{ id = "showCrosshair", label = "Crosshair" },
-		{ id = "showFovCircle", label = "FOV Circle" },
 		{ id = "showTargetCard", label = "Target Card" },
 		{ id = "showMiniHud", label = "Mini HUD" },
 		{ id = "showLookDirection", label = "Look Dir" },
+		{ id = "showTracers", label = "Tracers" },
+		{ id = "showCrosshair", label = "Crosshair" },
+		{ id = "showFovCircle", label = "FOV Circle" },
 	}
 
 	local MODE_VALUES = { "Toggle", "Hold" }
@@ -290,6 +322,7 @@ return function(context)
 		listening = nil,
 		rows = {},
 		modeButtons = {},
+		enabledButton = nil,
 		displayButton = nil,
 		menu = nil,
 		list = nil,
@@ -438,6 +471,12 @@ return function(context)
 		return context.userInputService and context.userInputService:GetFocusedTextBox() ~= nil
 	end
 
+	local function releaseAllHeld()
+		for _, def in ipairs(featureDefs) do
+			release(def.id)
+		end
+	end
+
 	local function cycleMode(currentMode)
 		for index, value in ipairs(MODE_VALUES) do
 			if value == currentMode then
@@ -472,6 +511,14 @@ return function(context)
 				context.setToggleState(state.displayButton, context.config.showKeybindsUi)
 			else
 				state.displayButton.Text = context.config.showKeybindsUi and "ON" or "OFF"
+			end
+		end
+
+		if state.enabledButton then
+			if context.setToggleState then
+				context.setToggleState(state.enabledButton, context.config.keybindsEnabled)
+			else
+				state.enabledButton.Text = context.config.keybindsEnabled and "ON" or "OFF"
 			end
 		end
 	end
@@ -530,8 +577,12 @@ return function(context)
 		local activeEntries = getActiveEntries()
 		local assignedEntries = getAssignedEntries()
 		local showMenu = #activeEntries > 0 or #assignedEntries > 0
-		state.menu.Visible = context.gui.Enabled and context.config.showKeybindsUi and showMenu
-		state.count.Text = string.format("%d ACTIVE", #activeEntries)
+		local allowVisible = true
+		if context.isUiReady then
+			allowVisible = context.isUiReady()
+		end
+		state.menu.Visible = allowVisible and context.gui.Enabled and context.config.showKeybindsUi and showMenu
+		state.count.Text = context.config.keybindsEnabled and string.format("%d ACTIVE", #activeEntries) or "DISABLED"
 
 		local menuHeight = 42
 
@@ -645,6 +696,17 @@ return function(context)
 		title.Size = UDim2.new(0, 100, 0, 14)
 		title.ZIndex = 13
 
+		local dragHandle = context.create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 0, 0, 0),
+			Size = UDim2.new(1, 0, 0, 24),
+			Text = "",
+			ZIndex = 14,
+			Parent = menu,
+		})
+
 		local count = context.create("TextLabel", {
 			AnchorPoint = Vector2.new(1, 0),
 			BackgroundColor3 = context.theme.accentSoft,
@@ -679,6 +741,9 @@ return function(context)
 		state.list = list
 		state.title = title
 		state.count = count
+		if context.makeOverlayDraggable then
+			context.makeOverlayDraggable(menu, "keybindPanel", dragHandle)
+		end
 	end
 
 	local function assignKeybind(featureId, newText)
@@ -721,10 +786,50 @@ return function(context)
 	end
 
 	local function buildRows(parent)
-		local _, headerValue = context.createStatusRow(parent, "BINDS", "PRESS KEY")
+		local pairIndex = 0
+		local function styleSection(row, accentColor)
+			if not row then
+				return
+			end
+			row.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
+			local stroke = row:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Color = accentColor or context.theme.border
+				stroke.Transparency = 0.28
+			end
+		end
+
+		local function styleBindRow(row, isModeRow)
+			if not row then
+				return
+			end
+			local toneA = isModeRow and Color3.fromRGB(24, 28, 38) or Color3.fromRGB(30, 34, 45)
+			local toneB = isModeRow and Color3.fromRGB(21, 25, 34) or Color3.fromRGB(26, 30, 40)
+			row.BackgroundColor3 = (pairIndex % 2 == 0) and toneA or toneB
+			local stroke = row:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = isModeRow and 0.52 or 0.4
+			end
+		end
+
+		local _, headerValue = context.createStatusRow(parent, "BINDS", "PRESS / DEL / RMB")
 		headerValue.TextColor3 = context.theme.accent
 
-		local _, displayButton = context.createToggleRow(parent, "DISPLAY PANEL", context.config.showKeybindsUi)
+		local enabledRow, enabledButton = context.createToggleRow(parent, "KEYBINDS ENABLED", context.config.keybindsEnabled)
+		styleSection(enabledRow, context.theme.accent)
+		state.enabledButton = enabledButton
+		enabledButton.MouseButton1Click:Connect(function()
+			context.config.keybindsEnabled = not context.config.keybindsEnabled
+			if not context.config.keybindsEnabled then
+				releaseAllHeld()
+			end
+			context.saveSettings()
+			refreshRows()
+			updateMenu()
+		end)
+
+		local displayRow, displayButton = context.createToggleRow(parent, "DISPLAY PANEL", context.config.showKeybindsUi)
+		styleSection(displayRow, context.theme.border)
 		state.displayButton = displayButton
 		displayButton.MouseButton1Click:Connect(function()
 			context.config.showKeybindsUi = not context.config.showKeybindsUi
@@ -733,15 +838,30 @@ return function(context)
 			updateMenu()
 		end)
 
+		styleSection(select(1, context.createStatusRow(parent, "VIEW + TARGET", "TOGGLE")), context.theme.focus)
 		for _, def in ipairs(featureDefs) do
-			local _, button = context.createKeybindRow(parent, string.upper(def.label), getKeybindText(def.id) or "NONE")
+			if def.id == "showTracers" then
+				styleSection(select(1, context.createStatusRow(parent, "VISUAL OVERLAYS", "TOGGLE")), context.theme.accent)
+			end
+			local bindRow, button = context.createKeybindRow(parent, string.upper(def.label), getKeybindText(def.id) or "NONE")
+			styleBindRow(bindRow, false)
 			state.rows[def.id] = button
 			button.MouseButton1Click:Connect(function()
 				state.listening = state.listening == def.id and nil or def.id
 				refreshRows()
 			end)
+			button.MouseButton2Click:Connect(function()
+				assignKeybind(def.id, "")
+				context.saveSettings()
+				refreshRows()
+				updateMenu()
+				if context.showToast then
+					context.showToast("Keybinds", string.format("%s cleared", def.label), context.theme.muted)
+				end
+			end)
 
-			local _, modeButton = context.createCycleRow(parent, string.upper(def.label .. " MODE"), string.upper(getMode(def.id)))
+			local modeRow, modeButton = context.createCycleRow(parent, string.upper(def.label .. " MODE"), string.upper(getMode(def.id)))
+			styleBindRow(modeRow, true)
 			state.modeButtons[def.id] = modeButton
 			modeButton.MouseButton1Click:Connect(function()
 				setMode(def.id, cycleMode(getMode(def.id)))
@@ -749,9 +869,12 @@ return function(context)
 				refreshRows()
 				updateMenu()
 			end)
+			pairIndex = pairIndex + 1
 		end
 
-		local _, resetButton = context.createCycleRow(parent, "RESET BINDS", "DEFAULTS")
+		styleSection(select(1, context.createStatusRow(parent, "RESET", "DEFAULTS")), context.theme.muted)
+		local resetRow, resetButton = context.createCycleRow(parent, "RESET BINDS", "DEFAULTS")
+		styleBindRow(resetRow, true)
 		resetButton.MouseButton1Click:Connect(resetDefaults)
 
 		refreshRows()
@@ -785,6 +908,10 @@ return function(context)
 		end
 
 		if isTyping() then
+			return false
+		end
+
+		if not context.config.keybindsEnabled then
 			return false
 		end
 
@@ -822,10 +949,294 @@ return function(context)
 		buildRows = buildRows,
 		handleInput = handleInput,
 		handleInputEnded = handleInputEnded,
+		resetPosition = function()
+			if context.resetOverlayPosition and state.menu then
+				context.resetOverlayPosition(state.menu, "keybindPanel")
+			end
+		end,
 		update = function()
 			refreshRows()
 			updateMenu()
 		end,
+	}
+end
+]==]
+local OVERLAY_TOOLS_MODULE_SOURCE = [==[
+return function(context)
+	local releaseTrack = {
+		latestVersion = "1.3.5",
+		title = "UI Polish + Preset Pass",
+		notes = {
+			"Added minimal mode for a cleaner stripped-down presentation.",
+			"Kept all overlays hidden until the intro animation finishes.",
+			"Stabilized draggable mini HUD, keybind panel, and target card behavior.",
+			"Reworked the utility page with clearer grouping and visual separation.",
+			"Reworked the keybind page with section cards and better scanability.",
+			"Expanded tooltip coverage across utility, visuals, target, player, and perf controls.",
+			"Improved labels for less obvious options like visibility check and Ctrl-click teleport.",
+			"Replaced the preset cycler with a dropdown selector and preset descriptions.",
+		},
+	}
+
+	local function getViewportSize()
+		local camera = workspace.CurrentCamera
+		return camera and camera.ViewportSize or Vector2.new(1920, 1080)
+	end
+
+	local function getOverlayConfigKeys(overlayId)
+		if overlayId == "miniHud" then
+			return "miniHudOffsetX", "miniHudOffsetY"
+		end
+
+		if overlayId == "keybindPanel" then
+			return "keybindPanelOffsetX", "keybindPanelOffsetY"
+		end
+
+		if overlayId == "targetCard" then
+			return "targetCardOffsetX", "targetCardOffsetY"
+		end
+
+		return nil, nil
+	end
+
+	local function getDefaultOverlayPosition(frame, overlayId)
+		local viewport = getViewportSize()
+		if overlayId == "miniHud" then
+			return viewport.X - frame.AbsoluteSize.X - 16, 16
+		end
+
+		if overlayId == "keybindPanel" then
+			return 16, 98
+		end
+
+		if overlayId == "targetCard" then
+			return viewport.X - frame.AbsoluteSize.X - 16, 180
+		end
+
+		return 16, 16
+	end
+
+	local function clampOverlayPosition(frame, x, y)
+		local viewport = getViewportSize()
+		local maxX = math.max(0, viewport.X - frame.AbsoluteSize.X)
+		local maxY = math.max(0, viewport.Y - frame.AbsoluteSize.Y)
+		return math.clamp(math.floor(x + 0.5), 0, maxX), math.clamp(math.floor(y + 0.5), 0, maxY)
+	end
+
+	local function setOverlayPosition(frame, overlayId, x, y, skipSave)
+		local keyX, keyY = getOverlayConfigKeys(overlayId)
+		if not keyX or not keyY then
+			return
+		end
+
+		x, y = clampOverlayPosition(frame, x, y)
+		frame.AnchorPoint = Vector2.zero
+		frame.Position = UDim2.new(0, x, 0, y)
+		context.config[keyX] = x
+		context.config[keyY] = y
+		if not skipSave then
+			context.saveSettings()
+		end
+	end
+
+	local function makeOverlayDraggable(frame, overlayId)
+		local keyX, keyY = getOverlayConfigKeys(overlayId)
+		if not keyX or not keyY then
+			return
+		end
+
+		if context.config[keyX] == nil or context.config[keyY] == nil or context.config[keyX] < 0 or context.config[keyY] < 0 then
+			local defaultX, defaultY = getDefaultOverlayPosition(frame, overlayId)
+			setOverlayPosition(frame, overlayId, defaultX, defaultY, true)
+		else
+			setOverlayPosition(frame, overlayId, context.config[keyX], context.config[keyY], true)
+		end
+		frame.Active = true
+		frame.Draggable = true
+		frame:GetPropertyChangedSignal("Position"):Connect(function()
+			local position = frame.Position
+			if position.X.Scale ~= 0 or position.Y.Scale ~= 0 then
+				return
+			end
+			if context.config[keyX] ~= position.X.Offset or context.config[keyY] ~= position.Y.Offset then
+				context.config[keyX] = position.X.Offset
+				context.config[keyY] = position.Y.Offset
+				context.saveSettings()
+			end
+		end)
+	end
+
+	local function resetOverlayPosition(frame, overlayId)
+		if not frame then
+			return
+		end
+		local defaultX, defaultY = getDefaultOverlayPosition(frame, overlayId)
+		setOverlayPosition(frame, overlayId, defaultX, defaultY, false)
+	end
+
+	local function compareSemanticVersions(left, right)
+		local function parse(version)
+			local parts = {}
+			for number in tostring(version):gmatch("%d+") do
+				table.insert(parts, tonumber(number) or 0)
+			end
+			return parts
+		end
+
+		local leftParts = parse(left)
+		local rightParts = parse(right)
+		local count = math.max(#leftParts, #rightParts)
+		for index = 1, count do
+			local a = leftParts[index] or 0
+			local b = rightParts[index] or 0
+			if a ~= b then
+				return a < b and -1 or 1
+			end
+		end
+
+		return 0
+	end
+
+	local function buildUpdatePanel(parent)
+		local row = context.createRow(parent, 178)
+		row.BackgroundColor3 = context.theme.panelAlt
+
+		local title = context.makeLabel(row, "UPDATE TRACK", 10, context.theme.accent, Enum.Font.GothamBold)
+		title.Position = UDim2.new(0, 10, 0, 8)
+		title.Size = UDim2.new(0, 112, 0, 12)
+
+		local statusBadge = context.create("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = context.theme.accentSoft,
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0, 8),
+			Size = UDim2.new(0, 92, 0, 18),
+			Font = Enum.Font.GothamBold,
+			Text = "CHECKING",
+			TextColor3 = context.theme.text,
+			TextSize = 8,
+			Parent = row,
+		})
+		context.addCorner(statusBadge, 999)
+
+		local current = context.makeLabel(row, "", 9, context.theme.text, Enum.Font.GothamBold)
+		current.Position = UDim2.new(0, 10, 0, 28)
+		current.Size = UDim2.new(0.48, -8, 0, 12)
+
+		local latest = context.makeLabel(row, "", 9, context.theme.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		latest.Position = UDim2.new(0.52, 0, 0, 28)
+		latest.Size = UDim2.new(0.48, -10, 0, 12)
+
+		local headline = context.makeLabel(row, releaseTrack.title, 10, context.theme.text, Enum.Font.GothamMedium)
+		headline.Position = UDim2.new(0, 10, 0, 46)
+		headline.Size = UDim2.new(1, -120, 0, 14)
+
+		local checkButton = context.create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0),
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0, 44),
+			Size = UDim2.new(0, 92, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = "CHECK NOW",
+			TextColor3 = context.theme.text,
+			TextSize = 8,
+			Parent = row,
+		})
+		context.addCorner(checkButton, 999)
+		context.addStroke(checkButton, context.theme.border, 0.35, 1)
+
+		local notesScroller = context.create("ScrollingFrame", {
+			Active = true,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			BackgroundColor3 = Color3.fromRGB(20, 24, 33),
+			BorderSizePixel = 0,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			Position = UDim2.new(0, 10, 0, 68),
+			ScrollBarImageColor3 = context.theme.accent,
+			ScrollBarThickness = 4,
+			Size = UDim2.new(1, -20, 1, -78),
+			Parent = row,
+		})
+		context.addCorner(notesScroller, 6)
+		context.addStroke(notesScroller, context.theme.border, 0.35, 1)
+
+		context.create("UIPadding", {
+			PaddingLeft = UDim.new(0, 8),
+			PaddingRight = UDim.new(0, 8),
+			PaddingTop = UDim.new(0, 8),
+			PaddingBottom = UDim.new(0, 8),
+			Parent = notesScroller,
+		})
+
+		context.create("UIListLayout", {
+			Padding = UDim.new(0, 4),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = notesScroller,
+		})
+
+		local notes = {}
+		for index = 1, #releaseTrack.notes do
+			local note = context.makeLabel(notesScroller, "", 9, context.theme.muted, Enum.Font.GothamMedium)
+			note.AutomaticSize = Enum.AutomaticSize.Y
+			note.Size = UDim2.new(1, 0, 0, 0)
+			note.TextWrapped = true
+			notes[index] = note
+		end
+
+		return {
+			row = row,
+			status = statusBadge,
+			current = current,
+			latest = latest,
+			headline = headline,
+			check = checkButton,
+			scroller = notesScroller,
+			notes = notes,
+		}
+	end
+
+	local function updateReleasePanel(panel)
+		if not panel or not panel.status then
+			return
+		end
+
+		local comparison = compareSemanticVersions(context.config.version, releaseTrack.latestVersion)
+		local upToDate = comparison >= 0
+		panel.current.Text = string.format("CURRENT  v%s", context.config.version)
+		panel.latest.Text = string.format("LATEST  v%s", releaseTrack.latestVersion)
+		panel.headline.Text = releaseTrack.title
+		panel.status.Text = upToDate and "UP TO DATE" or "UPDATE READY"
+		panel.status.BackgroundColor3 = upToDate and context.theme.accentSoft or Color3.fromRGB(92, 76, 28)
+		panel.status.TextColor3 = context.theme.text
+
+		for index, note in ipairs(panel.notes or {}) do
+			note.Text = releaseTrack.notes[index] and ("- " .. releaseTrack.notes[index]) or ""
+		end
+	end
+
+	local function bindUpdatePanel(panel)
+		if not panel or not panel.check then
+			return
+		end
+
+		panel.check.MouseButton1Click:Connect(function()
+			updateReleasePanel(panel)
+			if compareSemanticVersions(context.config.version, releaseTrack.latestVersion) >= 0 then
+				context.showToast("Update Checker", string.format("You're on v%s", context.config.version), context.theme.accent)
+			else
+				context.showToast("Update Checker", string.format("Latest is v%s", releaseTrack.latestVersion), context.theme.focus)
+			end
+		end)
+	end
+
+	return {
+		buildUpdatePanel = buildUpdatePanel,
+		bindUpdatePanel = bindUpdatePanel,
+		makeOverlayDraggable = makeOverlayDraggable,
+		resetOverlayPosition = resetOverlayPosition,
+		updateReleasePanel = updateReleasePanel,
 	}
 end
 ]==]
@@ -862,6 +1273,10 @@ local function requireLocalModule(modulePath, fallbackSource)
 	return nil
 end
 
+local function shouldPersistConfigKey(key)
+	return not NON_PERSISTENT_CONFIG_KEYS[key]
+end
+
 local function loadSettings()
 	if not canUseFileApi() or not isfile(SETTINGS_FILE) then
 		return
@@ -885,9 +1300,13 @@ local function loadSettings()
 	end
 
 	for _, key in ipairs(SETTING_KEYS) do
-		if configSource[key] ~= nil then
+		if shouldPersistConfigKey(key) and configSource[key] ~= nil then
 			CONFIG[key] = configSource[key]
 		end
+	end
+
+	if configSource.minimalMode == nil and configSource.compactMode ~= nil then
+		CONFIG.minimalMode = configSource.compactMode == true
 	end
 
 	if type(keybindSource) == "table" then
@@ -936,7 +1355,11 @@ local function saveSettings()
 	payload.autoLoadGamePreset = CONFIG.autoLoadGamePreset
 
 	for _, key in ipairs(SETTING_KEYS) do
-		payload[key] = CONFIG[key]
+		if shouldPersistConfigKey(key) then
+			payload[key] = CONFIG[key]
+		else
+			payload[key] = nil
+		end
 	end
 
 	payload.featureKeybinds = payload.featureKeybinds or {}
@@ -955,7 +1378,11 @@ local function saveSettings()
 	}
 
 	for _, key in ipairs(SETTING_KEYS) do
-		payload.placeConfigs[tostring(game.PlaceId)].settings[key] = CONFIG[key]
+		if shouldPersistConfigKey(key) then
+			payload.placeConfigs[tostring(game.PlaceId)].settings[key] = CONFIG[key]
+		else
+			payload.placeConfigs[tostring(game.PlaceId)].settings[key] = nil
+		end
 	end
 	payload.placeConfigs[tostring(game.PlaceId)].featureKeybinds = payload.placeConfigs[tostring(game.PlaceId)].featureKeybinds or {}
 	for featureId, keyText in pairs(FEATURE_KEYBINDS) do
@@ -1061,6 +1488,7 @@ local watermark = create("Frame", {
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 16, 0, 64),
 	Size = UDim2.new(0, 168, 0, 28),
+	Visible = false,
 	ZIndex = 12,
 	Parent = gui,
 })
@@ -1084,10 +1512,10 @@ do
 end
 
 local miniHud = create("Frame", {
-	AnchorPoint = Vector2.new(1, 0),
+	AnchorPoint = Vector2.zero,
 	BackgroundColor3 = Color3.fromRGB(18, 22, 32),
 	BorderSizePixel = 0,
-	Position = UDim2.new(1, -16, 0, 16),
+	Position = UDim2.new(0, 0, 0, 16),
 	Size = UDim2.new(0, 228, 0, 152),
 	ZIndex = 12,
 	Parent = gui,
@@ -1120,6 +1548,7 @@ do
 	label.Size = UDim2.new(1, -82, 0, 16)
 	label.ZIndex = 13
 end
+
 
 do
 	local chip = create("TextLabel", {
@@ -1205,7 +1634,7 @@ miniHudLabels.status = createMiniHudRow("STATUS")
 miniHudLabels.fps = createMiniHudRow("REFRESH")
 miniHudLabels.targets = createMiniHudRow("CONTACTS")
 miniHudLabels.focus = createMiniHudRow("LOCK")
-miniHud.Visible = CONFIG.showMiniHud
+miniHud.Visible = false
 
 toastLayer = create("Frame", {
 	AnchorPoint = Vector2.new(1, 1),
@@ -1296,8 +1725,20 @@ miniHudLabels.utility.killTextGlow = create("TextLabel", {
 })
 
 miniHudLabels.bindTooltip = function(guiObject, text)
+	if not guiObject or not guiObject.IsA or not guiObject:IsA("GuiObject") then
+		return
+	end
+
+	local function resolveText()
+		if type(text) == "function" then
+			local ok, result = pcall(text)
+			return ok and tostring(result or "") or ""
+		end
+		return tostring(text or "")
+	end
+
 	guiObject.MouseEnter:Connect(function()
-		miniHudLabels.tooltipLabel.Text = text
+		miniHudLabels.tooltipLabel.Text = resolveText()
 		miniHudLabels.tooltipFrame.Visible = true
 		local mouseLocation = UserInputService:GetMouseLocation()
 		miniHudLabels.tooltipFrame.Position = UDim2.new(0, mouseLocation.X + 14, 0, mouseLocation.Y + 18)
@@ -1474,8 +1915,8 @@ window.Visible = false
 
 local expandedWindowSize = UDim2.new(0, 416, 0, 564)
 local minimizedWindowSize = UDim2.new(0, 416, 0, 96)
-local compactWindowSize = UDim2.new(0, 428, 0, 528)
-local compactMinimizedWindowSize = UDim2.new(0, 428, 0, 86)
+local minimalWindowSize = UDim2.new(0, 392, 0, 486)
+local minimalMinimizedWindowSize = UDim2.new(0, 392, 0, 82)
 local uiMinimized = false
 local updateInterval = 1 / 30
 local currentFps = 0
@@ -1485,6 +1926,7 @@ local lastRefreshMs = 0
 PRESETS = {
 	{
 		name = "Legit",
+		description = "Low-noise ESP with names and distance only. Best for subtle use.",
 		apply = function()
 			CONFIG.showNames = true
 			CONFIG.showDistance = true
@@ -1497,6 +1939,7 @@ PRESETS = {
 	},
 	{
 		name = "Combat",
+		description = "Balanced combat layout with health, weapons, tracers, and visibility checks.",
 		apply = function()
 			CONFIG.showNames = true
 			CONFIG.showDistance = true
@@ -1509,6 +1952,7 @@ PRESETS = {
 	},
 	{
 		name = "Full",
+		description = "More complete combat info with stronger box visuals and full readouts.",
 		apply = function()
 			CONFIG.showNames = true
 			CONFIG.showDistance = true
@@ -1521,6 +1965,7 @@ PRESETS = {
 	},
 	{
 		name = "Rage",
+		description = "Aggressive tracking with skeletons, head dots, split tracers, and focus lock.",
 		apply = function()
 			CONFIG.showNames = true
 			CONFIG.showDistance = true
@@ -1538,6 +1983,7 @@ PRESETS = {
 	},
 	{
 		name = "Streamer",
+		description = "Cleaner, lower-profile visuals that hide obvious player-identifying info.",
 		apply = function()
 			CONFIG.showNames = false
 			CONFIG.showDistance = true
@@ -1554,6 +2000,7 @@ PRESETS = {
 	},
 	{
 		name = "Performance",
+		description = "Lightweight rendering preset for crowded games or lower-end machines.",
 		apply = function()
 			CONFIG.showNames = true
 			CONFIG.showDistance = true
@@ -1635,9 +2082,16 @@ SETTING_KEYS = {
 	"cameraFov",
 	"freeCamSpeed",
 	"removeZoomLimit",
+	"walkSpeedEnabled",
+	"walkSpeed",
+	"noclip",
+	"fly",
+	"flySpeed",
+	"clickTeleport",
 	"boxMode",
-	"compactMode",
+	"minimalMode",
 	"showMiniHud",
+	"keybindsEnabled",
 	"showKeybindsUi",
 	"showLookDirection",
 	"antiAfk",
@@ -1656,6 +2110,12 @@ SETTING_KEYS = {
 	"maxDistance",
 	"windowOffsetX",
 	"windowOffsetY",
+	"miniHudOffsetX",
+	"miniHudOffsetY",
+	"keybindPanelOffsetX",
+	"keybindPanelOffsetY",
+	"targetCardOffsetX",
+	"targetCardOffsetY",
 }
 
 loadSettings()
@@ -1859,7 +2319,7 @@ local pages = {
 	keybinds = createPage(),
 	display = createPage(),
 	combat = createPage(),
-	view = createPage(),
+	player = createPage(),
 	performance = createPage(),
 }
 
@@ -1877,6 +2337,27 @@ local function createRow(parent, height)
 	return row
 end
 
+do
+	local overlayFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\overlay_tools.lua", OVERLAY_TOOLS_MODULE_SOURCE)
+	if type(overlayFactory) == "function" then
+		overlayTools = overlayFactory({
+			addCorner = addCorner,
+			addStroke = addStroke,
+			config = CONFIG,
+			create = create,
+			createRow = createRow,
+			gui = gui,
+			guiService = game:GetService("GuiService"),
+			makeLabel = makeLabel,
+			saveSettings = saveSettings,
+			showToast = showToast,
+			theme = THEME,
+			userInputService = UserInputService,
+		})
+		overlayTools.makeOverlayDraggable(miniHud, "miniHud")
+	end
+end
+
 local function createStatusRow(parent, labelText, valueText)
 	local row = createRow(parent, 24)
 	local label = makeLabel(row, labelText, 11, THEME.muted, Enum.Font.GothamMedium)
@@ -1888,6 +2369,15 @@ local function createStatusRow(parent, labelText, valueText)
 	value.Position = UDim2.new(1, -10, 0, 0)
 	value.Size = UDim2.new(0, 132, 1, 0)
 	return row, value
+end
+
+function createNoteRow(parent, text)
+	local row = createRow(parent, 26)
+	row.BackgroundColor3 = THEME.panelAlt
+	local label = makeLabel(row, text, 9, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 10, 0, 0)
+	label.Size = UDim2.new(1, -20, 1, 0)
+	return row, label
 end
 
 local function createPerfRow(parent)
@@ -1961,6 +2451,103 @@ local function createCycleRow(parent, labelText, valueText)
 	addCorner(valueButton, 4)
 	addStroke(valueButton, THEME.border, 0.25, 1)
 	return row, valueButton
+end
+
+function createPresetDropdownRow(parent)
+	local row = createRow(parent, 30)
+	local closedHeight = 30
+	local optionHeight = 24
+	local openHeight = closedHeight + 8 + (#PRESETS * (optionHeight + 4))
+
+	local label = makeLabel(row, "PRESET", 10, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 10, 0, 0)
+	label.Size = UDim2.new(0, 110, 0, 30)
+
+	local mainButton = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -40, 0.5, 0),
+		Size = UDim2.new(0, 96, 0, 20),
+		Font = Enum.Font.GothamBold,
+		Text = PRESETS[currentPresetIndex].name,
+		TextColor3 = THEME.text,
+		TextSize = 10,
+		Parent = row,
+	})
+	addCorner(mainButton, 4)
+	addStroke(mainButton, THEME.border, 0.25, 1)
+
+	local arrowButton = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -10, 0.5, 0),
+		Size = UDim2.new(0, 24, 0, 20),
+		Font = Enum.Font.GothamBold,
+		Text = "v",
+		TextColor3 = THEME.text,
+		TextSize = 12,
+		Parent = row,
+	})
+	addCorner(arrowButton, 4)
+	addStroke(arrowButton, THEME.border, 0.25, 1)
+
+	local list = create("Frame", {
+		BackgroundColor3 = Color3.fromRGB(20, 24, 33),
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 10, 0, 34),
+		Size = UDim2.new(1, -20, 0, openHeight - closedHeight - 8),
+		Visible = false,
+		Parent = row,
+	})
+	addCorner(list, 6)
+	addStroke(list, THEME.border, 0.25, 1)
+
+	create("UIListLayout", {
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = list,
+	})
+
+	create("UIPadding", {
+		PaddingLeft = UDim.new(0, 6),
+		PaddingRight = UDim.new(0, 6),
+		PaddingTop = UDim.new(0, 6),
+		PaddingBottom = UDim.new(0, 6),
+		Parent = list,
+	})
+
+	local optionButtons = {}
+	for index, preset in ipairs(PRESETS) do
+		local option = create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundColor3 = index == currentPresetIndex and THEME.accentSoft or Color3.fromRGB(31, 36, 48),
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, 0, 0, optionHeight),
+			Font = Enum.Font.GothamBold,
+			Text = preset.name,
+			TextColor3 = index == currentPresetIndex and THEME.text or THEME.muted,
+			TextSize = 9,
+			Parent = list,
+		})
+		addCorner(option, 4)
+		addStroke(option, THEME.border, index == currentPresetIndex and 0.2 or 0.45, 1)
+		optionButtons[index] = option
+	end
+
+	return {
+		row = row,
+		button = mainButton,
+		arrow = arrowButton,
+		list = list,
+		options = optionButtons,
+		closedHeight = closedHeight,
+		openHeight = openHeight,
+		open = false,
+	}
 end
 
 local function createToggleRow(parent, labelText, defaultState)
@@ -2363,6 +2950,7 @@ do
 	headerRow.BackgroundColor3 = THEME.panelAlt
 	headerValue.TextColor3 = THEME.accent
 end
+createNoteRow(pages.control, "Suite behavior, presets, UI presentation, and utility actions.")
 
 miniHudLabels.perfStats = select(2, createPerfRow(pages.control))
 
@@ -2467,6 +3055,7 @@ do
 	headerRow.BackgroundColor3 = THEME.panelAlt
 	headerValue.TextColor3 = THEME.accent
 end
+createNoteRow(pages.display, "Nameplates, boxes, cards, and how world info is presented.")
 
 local tracerSliders = {}
 
@@ -2475,6 +3064,7 @@ do
 	headerRow.BackgroundColor3 = THEME.panelAlt
 	headerValue.TextColor3 = THEME.accent
 end
+createNoteRow(pages.combat, "Target selection, visibility rules, tracers, and crosshair tuning.")
 
 do
 	local row = createRow(pages.combat, 30)
@@ -2573,30 +3163,59 @@ do
 end
 
 do
-	local headerRow, headerValue = createStatusRow(pages.view, "VIEW", "ACTIVE")
+	local headerRow, headerValue = createStatusRow(pages.player, "PLAYER", "ACTIVE")
 	headerRow.BackgroundColor3 = THEME.panelAlt
 	headerValue.TextColor3 = THEME.accent
 end
+createNoteRow(pages.player, "View tools and local movement utilities. Movement settings are session-only.")
 
 do
 	local headerRow, headerValue = createStatusRow(pages.performance, "PERFORMANCE", "LOCAL")
 	headerRow.BackgroundColor3 = THEME.panelAlt
 	headerValue.TextColor3 = THEME.accent
 end
+createNoteRow(pages.performance, "Session-only visual cuts for lower-end machines or heavy games.")
 
 createStatusRow(pages.display, "ESP COLOR", "AUTO TEAM")
 
-local enabledToggle = select(2, createToggleRow(pages.control, "ESP ENABLED", CONFIG.enabled))
-local presetButton = select(2, createCycleRow(pages.control, "PRESET", PRESETS[currentPresetIndex].name))
-miniHudLabels.utility.teamCheckRow = createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
-miniHudLabels.utility.quickHideRow = createStatusRow(pages.control, "QUICK HIDE", keyCodeToText(CONFIG.quickHideKey))
-local cameraFovSlider = createSliderRow(pages.control, "CAMERA FOV", CONFIG.cameraFov, 40, 120)
-cameraFovSlider.reset = select(2, createCycleRow(pages.control, "RESET CAMERA", "DEFAULT"))
-local miniHudToggle = select(2, createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud))
-local compactToggle = select(2, createToggleRow(pages.control, "COMPACT MODE", CONFIG.compactMode))
+miniHudLabels.utility.controls = miniHudLabels.utility.controls or {}
+miniHudLabels.utility.utilityRowStyler = function(row, accentColor, tone)
+	if not row then
+		return
+	end
+	if tone then
+		row.BackgroundColor3 = tone
+	end
+	local stroke = row:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = accentColor or THEME.border
+		stroke.Transparency = accentColor and 0.28 or 0.42
+	end
+end
+miniHudLabels.utility.controls.enabledToggle = select(2, createToggleRow(pages.control, "ESP ENABLED", CONFIG.enabled))
+miniHudLabels.utility.controls.presetDropdown = createPresetDropdownRow(pages.control)
+miniHudLabels.utility.updatePanel = {}
+if overlayTools then
+	miniHudLabels.utility.updatePanel = overlayTools.buildUpdatePanel(pages.control)
+end
+miniHudLabels.utility.teamCheckRow, miniHudLabels.utility.teamCheckValue = createStatusRow(pages.control, "TEAM CHECK", "ALWAYS ON")
+miniHudLabels.utility.quickHideRow, miniHudLabels.utility.quickHideValue = createStatusRow(pages.control, "MENU TOGGLE", keyCodeToText(CONFIG.quickHideKey))
+miniHudLabels.utility.controls.cameraFovSlider = createSliderRow(pages.control, "CAMERA FOV", CONFIG.cameraFov, 40, 120)
+miniHudLabels.utility.controls.cameraFovSlider.reset = select(2, createCycleRow(pages.control, "RESET CAMERA", "DEFAULT"))
+miniHudLabels.utility.controls.miniHudToggle = select(2, createToggleRow(pages.control, "MINI HUD", CONFIG.showMiniHud))
+miniHudLabels.utility.controls.minimalToggle = select(2, createToggleRow(pages.control, "MINIMAL MODE", CONFIG.minimalMode))
 miniHudLabels.utility.antiAfk = select(2, createToggleRow(pages.control, "ANTI AFK", CONFIG.antiAfk))
-miniHudLabels.utility.autoLoadGamePreset = select(2, createToggleRow(pages.control, "AUTO LOAD PLACE PRESET", CONFIG.autoLoadGamePreset))
+miniHudLabels.utility.autoLoadGamePreset = select(2, createToggleRow(pages.control, "AUTO LOAD PLACE CONFIG", CONFIG.autoLoadGamePreset))
 miniHudLabels.saveStatusValue = select(2, createStatusRow(pages.control, "SETTINGS", canUseFileApi() and "AUTO SAVE" or "MEMORY"))
+miniHudLabels.utility.utilitySections = miniHudLabels.utility.utilitySections or {}
+miniHudLabels.utility.utilitySections.session = select(1, createStatusRow(pages.control, "SESSION", "LOCAL ONLY"))
+miniHudLabels.utility.utilitySections.actions = select(1, createStatusRow(pages.control, "MATCH ACTIONS", "LIVE"))
+miniHudLabels.utility.utilitySections.overlays = select(1, createStatusRow(pages.control, "OVERLAYS + RESETS", "LAYOUT"))
+miniHudLabels.utility.utilitySections.config = select(1, createStatusRow(pages.control, "CONFIG TOOLS", "SAVE"))
+miniHudLabels.utility.utilityRowStyler(miniHudLabels.utility.utilitySections.session, THEME.focus, Color3.fromRGB(24, 28, 38))
+miniHudLabels.utility.utilityRowStyler(miniHudLabels.utility.utilitySections.actions, THEME.accent, Color3.fromRGB(24, 28, 38))
+miniHudLabels.utility.utilityRowStyler(miniHudLabels.utility.utilitySections.overlays, THEME.border, Color3.fromRGB(24, 28, 38))
+miniHudLabels.utility.utilityRowStyler(miniHudLabels.utility.utilitySections.config, THEME.muted, Color3.fromRGB(24, 28, 38))
 
 do
 	local row = createRow(pages.control, 30)
@@ -2635,11 +3254,26 @@ end
 
 do
 	local row = createRow(pages.control, 30)
-	local resetDisplay = create("TextButton", {
+	local resetPos = create("TextButton", {
 		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
 		Position = UDim2.new(0, 10, 0.5, -10),
+		Size = UDim2.new(0.31, -4, 0, 20),
+		Text = "RST UI",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(resetPos, 4)
+	addStroke(resetPos, THEME.border, 0.35, 1)
+
+	local resetDisplay = create("TextButton", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.new(0.5, 0, 0.5, -10),
 		Size = UDim2.new(0.31, -4, 0, 20),
 		Text = "RST DSP",
 		TextColor3 = THEME.text,
@@ -2650,11 +3284,11 @@ do
 	addStroke(resetDisplay, THEME.border, 0.35, 1)
 
 	local resetView = create("TextButton", {
-		AnchorPoint = Vector2.new(0.5, 0),
+		AnchorPoint = Vector2.new(1, 0),
 		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
-		Position = UDim2.new(0.5, 0, 0.5, -10),
+		Position = UDim2.new(1, -10, 0.5, -10),
 		Size = UDim2.new(0.31, -4, 0, 20),
 		Text = "RST VIEW",
 		TextColor3 = THEME.text,
@@ -2664,24 +3298,50 @@ do
 	addCorner(resetView, 4)
 	addStroke(resetView, THEME.border, 0.35, 1)
 
+	miniHudLabels.utility.resetPositions = resetPos
+	miniHudLabels.utility.resetDisplay = resetDisplay
+	miniHudLabels.utility.resetView = resetView
+end
+
+do
+	local row = createRow(pages.control, 30)
 	local resetPerf = create("TextButton", {
-		AnchorPoint = Vector2.new(1, 0),
 		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
-		Position = UDim2.new(1, -10, 0.5, -10),
-		Size = UDim2.new(0.31, -4, 0, 20),
-		Text = "RST PERF",
+		Position = UDim2.new(0, 10, 0.5, -10),
+		Size = UDim2.new(1, -20, 0, 20),
+		Text = "RESET PERFORMANCE DEFAULTS",
 		TextColor3 = THEME.text,
 		TextSize = 9,
 		Parent = row,
 	})
 	addCorner(resetPerf, 4)
 	addStroke(resetPerf, THEME.border, 0.35, 1)
-
-	miniHudLabels.utility.resetDisplay = resetDisplay
-	miniHudLabels.utility.resetView = resetView
 	miniHudLabels.utility.resetPerformance = resetPerf
+end
+
+do
+	local utilityToneMap = {
+		{ button = miniHudLabels.utility.antiAfk, accent = THEME.focus, tone = Color3.fromRGB(29, 34, 45) },
+		{ button = miniHudLabels.utility.autoLoadGamePreset, accent = nil, tone = Color3.fromRGB(24, 29, 39) },
+		{ button = miniHudLabels.saveStatusValue, accent = nil, tone = Color3.fromRGB(21, 25, 34) },
+		{ button = miniHudLabels.utility.rejoin, accent = THEME.accent, tone = Color3.fromRGB(30, 34, 45) },
+		{ button = miniHudLabels.utility.hop, accent = nil, tone = Color3.fromRGB(24, 29, 39) },
+		{ button = miniHudLabels.utility.respawn, accent = THEME.accent, tone = Color3.fromRGB(30, 34, 45) },
+		{ button = miniHudLabels.utility.tools, accent = nil, tone = Color3.fromRGB(24, 29, 39) },
+		{ button = miniHudLabels.utility.resetPositions, accent = THEME.border, tone = Color3.fromRGB(29, 34, 45) },
+		{ button = miniHudLabels.utility.resetDisplay, accent = nil, tone = Color3.fromRGB(24, 29, 39) },
+		{ button = miniHudLabels.utility.resetView, accent = nil, tone = Color3.fromRGB(21, 25, 34) },
+		{ button = miniHudLabels.utility.resetPerformance, accent = THEME.muted, tone = Color3.fromRGB(29, 34, 45) },
+		{ button = miniHudLabels.utility.exportConfig, accent = THEME.accent, tone = Color3.fromRGB(30, 34, 45) },
+		{ button = miniHudLabels.utility.importConfig, accent = nil, tone = Color3.fromRGB(24, 29, 39) },
+	}
+
+	for _, entry in ipairs(utilityToneMap) do
+		local row = entry.button and entry.button.Parent
+		miniHudLabels.utility.utilityRowStyler(row, entry.accent, entry.tone)
+	end
 end
 
 do
@@ -2755,28 +3415,39 @@ do
 end
 
 do
-	select(1, miniHudLabels.utility.teamCheckRow).Parent = miniHudLabels.utility.controlTabs.generalPage
-	select(1, miniHudLabels.utility.quickHideRow).Parent = miniHudLabels.utility.controlTabs.generalPage
-	enabledToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
-	presetButton.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
-	cameraFovSlider.bar.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
-	cameraFovSlider.reset.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
-	miniHudToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
-	compactToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.teamCheckRow.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.quickHideRow.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.controls.enabledToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.controls.presetDropdown.row.Parent = miniHudLabels.utility.controlTabs.generalPage
+	if miniHudLabels.utility.updatePanel.row then
+		miniHudLabels.utility.updatePanel.row.Parent = miniHudLabels.utility.controlTabs.generalPage
+	end
+	miniHudLabels.utility.controls.cameraFovSlider.bar.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.controls.cameraFovSlider.reset.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.controls.miniHudToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
+	miniHudLabels.utility.controls.minimalToggle.Parent.Parent = miniHudLabels.utility.controlTabs.generalPage
 
 	miniHudLabels.utility.antiAfk.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.utilitySections.session.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.autoLoadGamePreset.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.saveStatusValue.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.utilitySections.actions.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.rejoin.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.hop.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.respawn.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.tools.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
-	miniHudLabels.utility.exportConfig.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.utilitySections.overlays.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.resetPositions.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.resetDisplay.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.resetView.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.resetPerformance.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.utilitySections.config.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.exportConfig.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
+	miniHudLabels.utility.importConfig.Parent.Parent = miniHudLabels.utility.controlTabs.utilityPage
 	miniHudLabels.utility.setControlTab("general")
 end
 
-local displayToggles = {
+miniHudLabels.utility.displayToggles = {
 	names = select(2, createToggleRow(pages.display, "NAME ABOVE HEAD", CONFIG.showNames)),
 	distance = select(2, createToggleRow(pages.display, "SHOW DISTANCE", CONFIG.showDistance)),
 	fade = select(2, createToggleRow(pages.display, "DISTANCE FADE", CONFIG.distanceFade)),
@@ -2789,11 +3460,11 @@ local displayToggles = {
 	boxes = select(2, createToggleRow(pages.display, "BOX ESP", CONFIG.showBoxes)),
 	boxMode = select(2, createCycleRow(pages.display, "BOX MODE", CONFIG.boxMode)),
 }
-displayToggles.targetCard = select(2, createToggleRow(pages.display, "TARGET CARD", CONFIG.showTargetCard))
-displayToggles.targetCardCompact = select(2, createToggleRow(pages.display, "TARGET CARD COMPACT", CONFIG.targetCardCompact))
-displayToggles.textStack = select(2, createCycleRow(pages.display, "TEXT STACK", CONFIG.textStackMode))
+miniHudLabels.utility.displayToggles.targetCard = select(2, createToggleRow(pages.display, "TARGET CARD", CONFIG.showTargetCard))
+miniHudLabels.utility.displayToggles.targetCardCompact = select(2, createToggleRow(pages.display, "COMPACT TARGET CARD", CONFIG.targetCardCompact))
+miniHudLabels.utility.displayToggles.textStack = select(2, createCycleRow(pages.display, "TEXT STACK", CONFIG.textStackMode))
 
-tracerSliders.visibilityToggle = select(2, createToggleRow(pages.combat, "HEAT VISION", CONFIG.visibilityCheck))
+tracerSliders.visibilityToggle = select(2, createToggleRow(pages.combat, "VISIBILITY CHECK", CONFIG.visibilityCheck))
 tracerSliders.tracersToggle = select(2, createToggleRow(pages.combat, "TRACERS", CONFIG.showTracers))
 tracerSliders.tracerOriginButton = select(2, createCycleRow(pages.combat, "TRACER ORIGIN", CONFIG.tracerOriginMode))
 tracerSliders.style = select(2, createCycleRow(pages.combat, "TRACER STYLE", CONFIG.tracerStyle))
@@ -2801,8 +3472,8 @@ do
 	local row = createRow(pages.combat, 76)
 	row.BackgroundColor3 = THEME.panelAlt
 	tracerSliders.targetCard = row
-	row.AnchorPoint = Vector2.new(1, 0)
-	row.Position = UDim2.new(1, -16, 0, 176)
+	row.AnchorPoint = Vector2.zero
+	row.Position = UDim2.new(0, 0, 0, 0)
 	row.Size = UDim2.new(0, 228, 0, 76)
 	row.Visible = false
 	row.ZIndex = 12
@@ -2849,6 +3520,39 @@ do
 	})
 	addCorner(tracerSliders.targetBadge, 999)
 	addStroke(tracerSliders.targetBadge, THEME.border, 0.35, 1)
+
+	if overlayTools then
+		overlayTools.makeOverlayDraggable(row, "targetCard")
+	end
+end
+
+function setRowEnabled(target, enabled)
+	local row = target
+	if target and target:IsA("GuiObject") and target.Parent and target.Parent:IsA("GuiObject") and target.Parent.BackgroundTransparency ~= 1 then
+		row = target.Parent
+	end
+	if not row or not row:IsA("GuiObject") then
+		return
+	end
+
+	row.BackgroundTransparency = enabled and 0 or 0.35
+	for _, descendant in ipairs(row:GetDescendants()) do
+		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
+			local baseTransparency = descendant:GetAttribute("BaseTextTransparency")
+			if baseTransparency == nil then
+				baseTransparency = descendant.TextTransparency
+				descendant:SetAttribute("BaseTextTransparency", baseTransparency)
+			end
+			descendant.TextTransparency = enabled and baseTransparency or math.min(1, baseTransparency + 0.38)
+		elseif descendant:IsA("UIStroke") then
+			local baseTransparency = descendant:GetAttribute("BaseTransparency")
+			if baseTransparency == nil then
+				baseTransparency = descendant.Transparency
+				descendant:SetAttribute("BaseTransparency", baseTransparency)
+			end
+			descendant.Transparency = enabled and baseTransparency or math.min(1, baseTransparency + 0.35)
+		end
+	end
 end
 tracerSliders.focusLock = select(2, createToggleRow(pages.combat, "FOCUS LOCK", CONFIG.focusLock))
 tracerSliders.threatMode = select(2, createCycleRow(pages.combat, "THREAT MODE", CONFIG.threatMode))
@@ -2895,9 +3599,9 @@ do
 	tracerSliders.setCombatTab("targeting")
 end
 
-miniHudLabels.bindTooltip(displayToggles.boxes, "Turns all box and highlight ESP on or off without losing your selected box style.")
-miniHudLabels.bindTooltip(displayToggles.boxMode, "Cycles the box style used when box ESP is enabled.")
-miniHudLabels.bindTooltip(displayToggles.headDotSize.bar, "Controls how small or aggressive the head dot marker appears.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.boxes, "Turns all box and highlight ESP on or off without losing your selected box style.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.boxMode, "Cycles the box style used when box ESP is enabled.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.headDotSize.bar, "Controls how small or aggressive the head dot marker appears.")
 miniHudLabels.bindTooltip(tracerSliders.visibilityToggle, "Uses line-of-sight checks so visible enemies can be styled differently from hidden ones.")
 miniHudLabels.bindTooltip(tracerSliders.tracerOriginButton, "Changes where tracers start: bottom of screen, center, or your crosshair.")
 miniHudLabels.bindTooltip(tracerSliders.style, "Direct draws a straight line, Split adds a segmented tactical snapline.")
@@ -2909,21 +3613,175 @@ miniHudLabels.bindTooltip(tracerSliders.crosshairGap.bar, "Controls the spacing 
 miniHudLabels.bindTooltip(tracerSliders.fovThickness.bar, "Adjusts the outline thickness of the FOV circle.")
 miniHudLabels.bindTooltip(tracerSliders.fovTransparency.bar, "Controls how visible or faint the FOV circle appears.")
 miniHudLabels.bindTooltip(miniHudLabels.utility.antiAfk, "Prevents Roblox from marking you idle by simulating local input when the idle prompt appears.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.controls.enabledToggle, "Master switch for the entire ESP suite.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.controls.presetDropdown.button, function()
+	local preset = PRESETS[currentPresetIndex]
+	return string.format("%s: %s", preset.name, preset.description or "Quick setup preset.")
+end)
+miniHudLabels.bindTooltip(miniHudLabels.utility.teamCheckValue, "Friendly players are always excluded from hostile ESP logic.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.quickHideValue, "Temporarily hides or shows the main menu and mini HUD.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.controls.cameraFovSlider.bar, "Adjusts the local camera field of view.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.controls.cameraFovSlider.reset, "Resets the camera field of view to the Roblox default.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.controls.miniHudToggle, "Shows or hides the floating combat telemetry widget.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.controls.minimalToggle, "Uses a cleaner stripped-down presentation across the whole script UI.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.autoLoadGamePreset, "Loads place-specific saved settings when available.")
+miniHudLabels.bindTooltip(miniHudLabels.saveStatusValue, "Persistent settings save to file. Session-only controls never write here.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.exportConfig, "Copies the current saved configuration into a portable JSON string.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.importConfig, "Loads a configuration from clipboard or the last exported session string.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.resetPositions, "Moves the mini HUD, keybind panel, and target card back to their default positions.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.resetDisplay, "Restores visual ESP presentation settings to their defaults.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.resetView, "Restores camera, spectate, and freecam view settings.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.resetPerformance, "Restores local performance options to their default state.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.rejoin, "Reconnects you to the current server instance.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.hop, "Finds another open public server in this place.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.respawn, "Reloads your local character if the game allows it.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.tools, "Attempts to unequip and clear local tool state.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.names, "Shows the player name above tracked characters.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.distance, "Shows how far each tracked player is from you.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.fade, "Makes ESP less opaque as distance increases.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.health, "Displays current health and health bars in ESP labels.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.weapon, "Shows the held tool or weapon name when detected.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.skeleton, "Draws a skeleton overlay on tracked players.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.headDot, "Adds a dot marker over enemy heads.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.focus, "Shows and highlights the script's chosen priority target.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.targetCard, "Shows the draggable target telemetry card for the current focus target.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.targetCardCompact, "Uses a shorter target card layout with less secondary detail.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.displayToggles.textStack, "Inline keeps labels on one line. Stacked splits info into multiple lines.")
+miniHudLabels.bindTooltip(tracerSliders.tracersToggle, "Master switch for all tracer rendering.")
+miniHudLabels.bindTooltip(tracerSliders.thickness.bar, "Adjusts tracer line width.")
+miniHudLabels.bindTooltip(tracerSliders.transparency.bar, "Controls how strong or faint tracers appear.")
+miniHudLabels.bindTooltip(tracerSliders.lookDirectionToggle, "Adds a direction arrow for the active focus target.")
+miniHudLabels.bindTooltip(tracerSliders.fovCircleSlider.bar, "Sets the crosshair-centered FOV circle radius.")
+miniHudLabels.bindTooltip(tracerSliders.fovCircleSlider.reset, "Resets the FOV circle radius to its default.")
+miniHudLabels.bindTooltip(tracerSliders.crosshairToggle, "Shows the custom mouse-following crosshair.")
+miniHudLabels.bindTooltip(tracerSliders.crosshairStyleButton, "Changes the crosshair shape.")
+miniHudLabels.bindTooltip(crosshairColorButtons[1].button.Parent.Parent, "Selects the color used for the custom crosshair and FOV circle.")
+miniHudLabels.bindTooltip(tracerSliders.crosshairSizeSlider.bar, "Adjusts the overall size of the custom crosshair.")
+miniHudLabels.bindTooltip(tracerSliders.fovCircleToggle, "Shows or hides the FOV circle independently of the crosshair.")
 
 local viewButtons = {
-	status = select(2, createStatusRow(pages.view, "STATUS", "LOCAL")),
-	spectate = createSpectateRow(pages.view),
+	status = select(2, createStatusRow(pages.player, "STATUS", "LOCAL")),
+	spectate = createSpectateRow(pages.player),
 	nav = {},
-	freeCam = select(2, createToggleRow(pages.view, "FREE CAM", false)),
-	removeZoomLimit = select(2, createToggleRow(pages.view, "REMOVE ZOOM LIMIT", CONFIG.removeZoomLimit)),
-	speed = createSliderRow(pages.view, "FREECAM SPEED", CONFIG.freeCamSpeed, 24, 160),
-	reset = select(2, createCycleRow(pages.view, "RESET VIEW", "DEFAULT")),
+	freeCam = select(2, createToggleRow(pages.player, "FREE CAM", false)),
+	removeZoomLimit = select(2, createToggleRow(pages.player, "REMOVE ZOOM LIMIT", CONFIG.removeZoomLimit)),
+	speed = createSliderRow(pages.player, "FREECAM SPEED", CONFIG.freeCamSpeed, 24, 160),
+	reset = select(2, createCycleRow(pages.player, "RESET VIEW", "DEFAULT")),
+}
+
+local playerButtons = {
+	tabs = {},
+	status = nil,
+	walkSpeedToggle = nil,
+	walkSpeed = nil,
+	noclip = nil,
+	fly = nil,
+	flySpeed = nil,
+	clickTeleport = nil,
+	reset = nil,
 }
 
 miniHudLabels.bindTooltip(viewButtons.removeZoomLimit, "Removes the default local camera zoom cap so you can scroll farther out.")
+miniHudLabels.bindTooltip(viewButtons.status, "Shows whether you are on local view, spectating, or in freecam.")
+miniHudLabels.bindTooltip(viewButtons.spectate.main, "Open the player list to spectate another character.")
+miniHudLabels.bindTooltip(viewButtons.spectate.off, "Immediately return from spectate to your own camera.")
+miniHudLabels.bindTooltip(viewButtons.freeCam, "Toggles scriptable freecam with independent movement controls.")
+miniHudLabels.bindTooltip(viewButtons.speed.bar, "Sets the movement speed used while freecam is active.")
+miniHudLabels.bindTooltip(viewButtons.reset, "Restores freecam, spectate, and view settings.")
+miniHudLabels.bindTooltip(viewButtons.nav.prev, "Step to the previous player in the spectate list.")
+miniHudLabels.bindTooltip(viewButtons.nav.next, "Step to the next player in the spectate list.")
 
 do
-	local row = createRow(pages.view, 30)
+	local row = createRow(pages.player, 30)
+	local holder = create("Frame", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 10, 0, 5),
+		Size = UDim2.new(1, -20, 0, 20),
+		Parent = row,
+	})
+
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = holder,
+	})
+
+	for _, item in ipairs({
+		{ key = "view", label = "VIEW", width = 82 },
+		{ key = "player", label = "PLAYER", width = 88 },
+	}) do
+		playerButtons.tabs[item.key] = create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundColor3 = item.key == "view" and THEME.accentSoft or Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, item.width, 1, 0),
+			Font = Enum.Font.GothamBold,
+			Text = item.label,
+			TextColor3 = item.key == "view" and THEME.text or THEME.muted,
+			TextSize = 9,
+			Parent = holder,
+		})
+		addCorner(playerButtons.tabs[item.key], 999)
+		addStroke(playerButtons.tabs[item.key], THEME.border, item.key == "view" and 0.15 or 0.5, 1)
+	end
+
+	local body = create("Frame", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, 0, 0, 0),
+		Parent = pages.player,
+	})
+
+	create("UIListLayout", {
+		Padding = UDim.new(0, 0),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = body,
+	})
+
+	for _, item in ipairs({ "view", "player" }) do
+		playerButtons.tabs[item .. "Page"] = create("Frame", {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AutomaticSize = Enum.AutomaticSize.Y,
+			Size = UDim2.new(1, 0, 0, 0),
+			Visible = item == "view",
+			Parent = body,
+		})
+
+		create("UIListLayout", {
+			Padding = UDim.new(0, 5),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = playerButtons.tabs[item .. "Page"],
+		})
+	end
+
+	playerButtons.setTab = function(tabName)
+		for _, item in ipairs({ "view", "player" }) do
+			local selected = item == tabName
+			playerButtons.tabs[item].BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
+			playerButtons.tabs[item].TextColor3 = selected and THEME.text or THEME.muted
+			playerButtons.tabs[item .. "Page"].Visible = selected
+			local stroke = playerButtons.tabs[item]:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = selected and 0.15 or 0.5
+			end
+		end
+	end
+
+	playerButtons.tabs.view.MouseButton1Click:Connect(function()
+		playerButtons.setTab("view")
+	end)
+
+	playerButtons.tabs.player.MouseButton1Click:Connect(function()
+		playerButtons.setTab("player")
+	end)
+end
+
+do
+	local row = createRow(pages.player, 30)
 	local prev = create("TextButton", {
 		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
 		BorderSizePixel = 0,
@@ -2957,13 +3815,56 @@ do
 	viewButtons.nav.next = nextButton
 end
 
-local performanceToggles = {
-	mode = select(2, createToggleRow(pages.performance, "BOOST MODE", CONFIG.performanceMode)),
+playerButtons.status = select(2, createStatusRow(pages.player, "MOVEMENT", "SESSION"))
+playerButtons.walkSpeedToggle = select(2, createToggleRow(pages.player, "WALK SPEED", CONFIG.walkSpeedEnabled))
+playerButtons.walkSpeed = createSliderRow(pages.player, "WALK SPEED VALUE", CONFIG.walkSpeed, 16, 100)
+playerButtons.noclip = select(2, createToggleRow(pages.player, "NOCLIP", CONFIG.noclip))
+playerButtons.fly = select(2, createToggleRow(pages.player, "FLY", CONFIG.fly))
+playerButtons.flySpeed = createSliderRow(pages.player, "FLY SPEED", CONFIG.flySpeed, 24, 140)
+playerButtons.clickTeleport = select(2, createToggleRow(pages.player, "CTRL + CLICK TP", CONFIG.clickTeleport))
+playerButtons.reset = select(2, createCycleRow(pages.player, "RESET PLAYER", "DEFAULT"))
+
+do
+	viewButtons.status.Parent.Parent = playerButtons.tabs.viewPage
+	viewButtons.spectate.main.Parent.Parent = playerButtons.tabs.viewPage
+	viewButtons.freeCam.Parent.Parent = playerButtons.tabs.viewPage
+	viewButtons.removeZoomLimit.Parent.Parent = playerButtons.tabs.viewPage
+	viewButtons.speed.bar.Parent.Parent = playerButtons.tabs.viewPage
+	viewButtons.reset.Parent.Parent = playerButtons.tabs.viewPage
+	viewButtons.nav.prev.Parent.Parent = playerButtons.tabs.viewPage
+
+	playerButtons.status.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.walkSpeedToggle.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.walkSpeed.bar.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.noclip.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.fly.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.flySpeed.bar.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.clickTeleport.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.reset.Parent.Parent = playerButtons.tabs.playerPage
+	playerButtons.setTab("view")
+end
+
+miniHudLabels.bindTooltip(playerButtons.walkSpeedToggle, "Override your local walk speed with the value below.")
+miniHudLabels.bindTooltip(playerButtons.walkSpeed.bar, "Set the local movement speed used when walk speed override is enabled.")
+miniHudLabels.bindTooltip(playerButtons.noclip, "Disables collisions on your local character so you can phase through parts.")
+miniHudLabels.bindTooltip(playerButtons.fly, "Enables upright flight with hover hold. Use WASD, Space, LeftControl, Shift to boost, and LeftAlt for precision.")
+miniHudLabels.bindTooltip(playerButtons.flySpeed.bar, "Sets the base movement speed used while flight is enabled.")
+miniHudLabels.bindTooltip(playerButtons.clickTeleport, "Hold LeftControl and click to teleport to the cursor position.")
+miniHudLabels.bindTooltip(playerButtons.status, "Shows which local movement utilities are currently active.")
+miniHudLabels.bindTooltip(playerButtons.reset, "Restores local movement settings to their default values for this session.")
+
+miniHudLabels.utility.performanceToggles = {
+	mode = select(2, createToggleRow(pages.performance, "PERF BOOST", CONFIG.performanceMode)),
 	materials = select(2, createToggleRow(pages.performance, "LOW MATERIALS", CONFIG.simplifyMaterials)),
 	textures = select(2, createToggleRow(pages.performance, "HIDE TEXTURES", CONFIG.hideTextures)),
 	effects = select(2, createToggleRow(pages.performance, "HIDE EFFECTS", CONFIG.hideEffects)),
 	shadows = select(2, createToggleRow(pages.performance, "DISABLE SHADOWS", CONFIG.disableShadows)),
 }
+miniHudLabels.bindTooltip(miniHudLabels.utility.performanceToggles.mode, "Enables the full local performance preset by turning on all visual cuts together.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.performanceToggles.materials, "Simplifies part materials to reduce visual overhead.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.performanceToggles.textures, "Hides decals and textures locally.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.performanceToggles.effects, "Disables particles, beams, trails, and similar visual effects locally.")
+miniHudLabels.bindTooltip(miniHudLabels.utility.performanceToggles.shadows, "Turns off lighting shadows locally for a cleaner performance profile.")
 
 local espObjects = {}
 local drawingSupported = DRAWING_SUPPORT.line
@@ -2989,6 +3890,9 @@ local viewState = {
 	moveUp = 0,
 	controls = nil,
 	humanoidState = nil,
+	flyVelocity = nil,
+	flyLookVector = nil,
+	defaultWalkSpeed = nil,
 	defaultMinZoomDistance = nil,
 	defaultMaxZoomDistance = nil,
 	lockedFocusTarget = nil,
@@ -3187,6 +4091,15 @@ local function resetViewSettings()
 	CONFIG.cameraRigPreset = "Mid"
 end
 
+local function resetPlayerSettings()
+	CONFIG.walkSpeedEnabled = false
+	CONFIG.walkSpeed = 24
+	CONFIG.noclip = false
+	CONFIG.fly = false
+	CONFIG.flySpeed = 72
+	CONFIG.clickTeleport = false
+end
+
 local function resetPerformanceSettings()
 	CONFIG.performanceMode = false
 	CONFIG.simplifyMaterials = false
@@ -3227,6 +4140,93 @@ local function getLocalHumanoid()
 	local character = LOCAL_PLAYER and LOCAL_PLAYER.Character
 	return character and character:FindFirstChildOfClass("Humanoid") or nil
 end
+
+local function getLocalRoot()
+	local character = LOCAL_PLAYER and LOCAL_PLAYER.Character
+	return character and getCharacterRoot(character) or nil
+end
+
+local function applyPlayerMovementState()
+	local character = LOCAL_PLAYER and LOCAL_PLAYER.Character
+	local humanoid = getLocalHumanoid()
+	local root = getLocalRoot()
+	if not character or not humanoid or not root or viewState.freeCamEnabled then
+		return
+	end
+
+	if viewState.defaultWalkSpeed == nil then
+		viewState.defaultWalkSpeed = humanoid.WalkSpeed
+	end
+
+	if CONFIG.walkSpeedEnabled then
+		if humanoid.WalkSpeed ~= CONFIG.walkSpeed then
+			humanoid.WalkSpeed = CONFIG.walkSpeed
+		end
+	elseif viewState.defaultWalkSpeed and humanoid.WalkSpeed ~= viewState.defaultWalkSpeed then
+		humanoid.WalkSpeed = viewState.defaultWalkSpeed
+	end
+
+	if not CONFIG.fly and humanoid.AutoRotate == false then
+		humanoid.AutoRotate = true
+	end
+
+	if CONFIG.noclip then
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Blacklist
+		params.FilterDescendantsInstances = { character }
+		params.IgnoreWater = true
+		local floorResult = workspace:Raycast(root.Position, Vector3.new(0, -4.5, 0), params)
+
+		for _, descendant in ipairs(character:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.CanCollide = false
+			end
+		end
+
+		if floorResult and root.AssemblyLinearVelocity.Y <= 0 and not UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+			local targetY = floorResult.Position.Y + humanoid.HipHeight + (root.Size.Y * 0.5) + 0.05
+			if root.Position.Y < targetY + 0.35 then
+				root.CFrame = CFrame.fromMatrix(
+					Vector3.new(root.Position.X, targetY, root.Position.Z),
+					root.CFrame.XVector,
+					root.CFrame.YVector,
+					root.CFrame.ZVector
+				)
+				root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, math.max(0, root.AssemblyLinearVelocity.Y), root.AssemblyLinearVelocity.Z)
+			end
+		end
+	end
+end
+
+local function stopFly()
+	local humanoid = getLocalHumanoid()
+	local root = getLocalRoot()
+	if humanoid then
+		humanoid.PlatformStand = false
+		humanoid.AutoRotate = true
+		pcall(function()
+			humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end)
+		pcall(function()
+			humanoid:ChangeState(Enum.HumanoidStateType.Running)
+		end)
+	end
+	if root then
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+	viewState.flyVelocity = Vector3.zero
+	viewState.flyLookVector = nil
+	viewState.moveForward = 0
+	viewState.moveRight = 0
+	viewState.moveUp = 0
+end
+
+local function resetDefaultMovementCache()
+	local humanoid = getLocalHumanoid()
+	viewState.defaultWalkSpeed = humanoid and humanoid.WalkSpeed or nil
+end
+
 
 local function applyZoomLimitSetting()
 	if not LOCAL_PLAYER then
@@ -3339,6 +4339,23 @@ local function updateViewUi()
 	end
 	if viewButtons.speed then
 		setSliderState(viewButtons.speed, CONFIG.freeCamSpeed)
+	end
+	if playerButtons.status then
+		local states = {}
+		if CONFIG.walkSpeedEnabled then
+			table.insert(states, string.format("SPD %d", CONFIG.walkSpeed))
+		end
+		if CONFIG.fly then
+			table.insert(states, "FLY")
+		end
+		if CONFIG.noclip then
+			table.insert(states, "NOCLIP")
+		end
+		if CONFIG.clickTeleport then
+			table.insert(states, "CLICK TP")
+		end
+		playerButtons.status.Text = #states > 0 and table.concat(states, " | ") or "LOCAL"
+		playerButtons.status.TextColor3 = #states > 0 and THEME.accent or THEME.text
 	end
 end
 
@@ -4567,12 +5584,11 @@ local function updatePerfStatsUi()
 	end
 
 	if tracerSliders.targetInfo then
-		local targetCardHeight = CONFIG.targetCardCompact and 58 or 76
+		local compactTargetCard = CONFIG.targetCardCompact or CONFIG.minimalMode
+		local targetCardHeight = compactTargetCard and 58 or 76
 		if tracerSliders.targetCard then
-			local anchorYOffset = (miniHud.Visible and miniHud.AbsoluteSize.Y or 0) + 12
-			tracerSliders.targetCard.Position = UDim2.new(1, -16, 0, 16 + anchorYOffset)
 			tracerSliders.targetCard.Size = UDim2.new(0, 228, 0, targetCardHeight)
-			tracerSliders.targetCard.Visible = gui.Enabled and CONFIG.showTargetCard
+			tracerSliders.targetCard.Visible = uiReady and gui.Enabled and CONFIG.showTargetCard
 		end
 		if focusedPlayer and CONFIG.showTargetCard then
 			local character = focusedPlayer.Character
@@ -4631,7 +5647,7 @@ local function updatePerfStatsUi()
 				tracerSliders.targetBadge.BackgroundColor3 = telemetry.aimingAtYou and Color3.fromRGB(86, 71, 28) or Color3.fromRGB(35, 40, 53)
 			end
 			if tracerSliders.targetInfoMeta2 then
-				tracerSliders.targetInfoMeta2.Visible = not CONFIG.targetCardCompact
+				tracerSliders.targetInfoMeta2.Visible = not compactTargetCard
 			end
 		else
 			tracerSliders.targetInfo.Text = "NONE"
@@ -4643,7 +5659,7 @@ local function updatePerfStatsUi()
 			if tracerSliders.targetInfoMeta2 then
 				tracerSliders.targetInfoMeta2.Text = "--"
 				tracerSliders.targetInfoMeta2.TextColor3 = THEME.muted
-				tracerSliders.targetInfoMeta2.Visible = not CONFIG.targetCardCompact
+				tracerSliders.targetInfoMeta2.Visible = not compactTargetCard
 			end
 			if tracerSliders.targetBadge then
 				tracerSliders.targetBadge.Text = "NO LOCK"
@@ -4791,6 +5807,9 @@ local function hookCharacter(player)
 
 	player.CharacterAdded:Connect(function()
 		task.wait(0.2)
+		if player == LOCAL_PLAYER then
+			resetDefaultMovementCache()
+		end
 		attachCharacterSignals(player.Character)
 		refreshAllEsp()
 	end)
@@ -4801,6 +5820,9 @@ local function hookCharacter(player)
 	end)
 
 	if player.Character then
+		if player == LOCAL_PLAYER then
+			resetDefaultMovementCache()
+		end
 		attachCharacterSignals(player.Character)
 	end
 end
@@ -4812,6 +5834,13 @@ local function bindToggle(button, configKey)
 end
 
 applyConfigToggleState = function(configKey, nextState, suppressToast)
+	if configKey == "walkSpeedEnabled" then
+		local humanoid = getLocalHumanoid()
+		if nextState and humanoid and not viewState.defaultWalkSpeed then
+			viewState.defaultWalkSpeed = humanoid.WalkSpeed
+		end
+	end
+
 	CONFIG[configKey] = nextState
 
 	if configKey == "performanceMode" and not CONFIG[configKey] then
@@ -4837,7 +5866,7 @@ applyConfigToggleState = function(configKey, nextState, suppressToast)
 	end
 
 	if configKey == "showMiniHud" then
-		miniHud.Visible = CONFIG.showMiniHud and window.Visible
+		miniHud.Visible = uiReady and CONFIG.showMiniHud and window.Visible
 	elseif configKey == "showCrosshair" then
 		if CONFIG.showCrosshair then
 			updateCrosshair()
@@ -4848,11 +5877,22 @@ applyConfigToggleState = function(configKey, nextState, suppressToast)
 		applyZoomLimitSetting()
 	elseif configKey == "antiAfk" then
 		miniHudLabels.utility.applyAntiAfk()
+	elseif configKey == "fly" and not CONFIG.fly then
+		stopFly()
+	elseif configKey == "walkSpeedEnabled" and not CONFIG.walkSpeedEnabled then
+		local humanoid = getLocalHumanoid()
+		if humanoid and viewState.defaultWalkSpeed then
+			humanoid.WalkSpeed = viewState.defaultWalkSpeed
+		end
 	end
 
 	refreshAllEsp()
 	saveSettings()
 	updateMouseIconVisibility()
+	applyPlayerMovementState()
+	if updateControlAvailability then
+		updateControlAvailability()
+	end
 	if keybindController then
 		keybindController.update()
 	end
@@ -4864,7 +5904,7 @@ end
 
 local function setEspEnabled(state)
 	CONFIG.enabled = state
-	setToggleState(enabledToggle, state)
+	setToggleState(miniHudLabels.utility.controls.enabledToggle, state)
 	if state then
 		refreshAllEsp()
 	else
@@ -4877,31 +5917,56 @@ local function setEspEnabled(state)
 	showToast("ESP", state and "ESP enabled" or "ESP disabled", state and THEME.accent or THEME.muted)
 end
 
-local function applyCompactMode(state)
-	CONFIG.compactMode = state
+local function applyMinimalMode(state, skipSave)
+	CONFIG.minimalMode = state
 	chrome.infoPanel.Visible = not state
 	chrome.brandSub.Visible = not state
-	chrome.topBar.Size = state and UDim2.new(1, 0, 0, 82) or UDim2.new(1, 0, 0, 108)
-	tabBar.Position = state and UDim2.new(0, 12, 0, 50) or UDim2.new(0, 12, 0, 78)
-	content.Position = state and UDim2.new(0, 0, 0, 82) or UDim2.new(0, 0, 0, 108)
-	content.Size = state and UDim2.new(1, 0, 1, -82) or UDim2.new(1, 0, 1, -108)
-	chrome.brand.Size = state and UDim2.new(0, 170, 0, 28) or UDim2.new(0, 186, 0, 42)
-	chrome.brandTitle.TextSize = state and 19 or 21
-	chrome.brandTitle.Position = state and UDim2.new(0, 0, 0, 8) or UDim2.new(0, 0, 0, 9)
 	chrome.brandKicker.Visible = not state
 	chrome.glow.Visible = not state
-	saveSettings()
+	chrome.topBar.Size = state and UDim2.new(1, 0, 0, 74) or UDim2.new(1, 0, 0, 108)
+	tabBar.Position = state and UDim2.new(0, 12, 0, 42) or UDim2.new(0, 12, 0, 78)
+	content.Position = state and UDim2.new(0, 0, 0, 74) or UDim2.new(0, 0, 0, 108)
+	content.Size = state and UDim2.new(1, 0, 1, -74) or UDim2.new(1, 0, 1, -108)
+	chrome.brand.Size = state and UDim2.new(0, 156, 0, 24) or UDim2.new(0, 186, 0, 42)
+	chrome.brandTitle.TextSize = state and 18 or 21
+	chrome.brandTitle.Position = state and UDim2.new(0, 0, 0, 4) or UDim2.new(0, 0, 0, 9)
+
+	if watermark then
+		watermark.Visible = uiReady and not state
+	end
+
+	local miniHudCompact = state
+	miniHud.Size = miniHudCompact and UDim2.new(0, 228, 0, 126) or UDim2.new(0, 228, 0, 152)
+	if miniHudLabels.fps and miniHudLabels.fps.Parent and miniHudLabels.fps.Parent.Parent then
+		miniHudLabels.fps.Parent.Parent.Visible = not miniHudCompact
+	end
+
+	updatePerfStatsUi()
+
+	if not skipSave then
+		saveSettings()
+	end
 end
 
 local function setMinimized(state)
 	uiMinimized = state
 	content.Visible = not state
-	if CONFIG.compactMode then
-		window.Size = state and compactMinimizedWindowSize or compactWindowSize
+	if CONFIG.minimalMode then
+		window.Size = state and minimalMinimizedWindowSize or minimalWindowSize
 	else
 		window.Size = state and minimizedWindowSize or expandedWindowSize
 	end
 	chrome.minimizeButton.Text = state and "+" or "-"
+end
+
+function resetOverlayPositions()
+	if overlayTools and overlayTools.resetOverlayPosition then
+		overlayTools.resetOverlayPosition(miniHud, "miniHud")
+		overlayTools.resetOverlayPosition(tracerSliders.targetCard, "targetCard")
+	end
+	if keybindController and keybindController.resetPosition then
+		keybindController.resetPosition()
+	end
 end
 
 local function playIntroAnimation()
@@ -4978,16 +6043,19 @@ local function playIntroAnimation()
 		end
 	end)
 
+	uiReady = true
 	setActiveTab("control")
 	window.Position = UDim2.new(0.5, CONFIG.windowOffsetX, 0.5, CONFIG.windowOffsetY)
 	window.Visible = true
+	watermark.Visible = not CONFIG.minimalMode
 	miniHud.Visible = CONFIG.showMiniHud
 	syncUiFromConfig()
 	applyCameraFov()
 	applyZoomLimitSetting()
+	resetDefaultMovementCache()
 	miniHudLabels.utility.applyAntiAfk()
 	applyPerformanceSettings()
-	applyCompactMode(CONFIG.compactMode)
+	applyMinimalMode(CONFIG.minimalMode)
 	setActiveTab("control")
 	setMinimized(false)
 	refreshAllEsp()
@@ -4997,82 +6065,90 @@ local function playIntroAnimation()
 	end
 end
 
-createTabButton("control", "CONTROL").MouseButton1Click:Connect(function()
+createTabButton("control", "UTILITY").MouseButton1Click:Connect(function()
 	setActiveTab("control")
 end)
 
-createTabButton("display", "DISPLAY").MouseButton1Click:Connect(function()
+createTabButton("display", "VISUALS").MouseButton1Click:Connect(function()
 	setActiveTab("display")
 end)
 
-createTabButton("combat", "COMBAT").MouseButton1Click:Connect(function()
+createTabButton("combat", "TARGET").MouseButton1Click:Connect(function()
 	setActiveTab("combat")
 end)
 
-createTabButton("view", "VIEW").MouseButton1Click:Connect(function()
-	setActiveTab("view")
+createTabButton("player", "PLAYER").MouseButton1Click:Connect(function()
+	setActiveTab("player")
 end)
 
-createTabButton("performance", "PERF").MouseButton1Click:Connect(function()
+createTabButton("performance", "LOCAL").MouseButton1Click:Connect(function()
 	setActiveTab("performance")
 end)
 
-bindToggle(enabledToggle, "enabled")
-bindToggle(displayToggles.names, "showNames")
-bindToggle(displayToggles.distance, "showDistance")
-bindToggle(displayToggles.fade, "distanceFade")
-bindToggle(displayToggles.health, "showHealth")
-bindToggle(displayToggles.weapon, "showWeapon")
-bindToggle(displayToggles.skeleton, "showSkeleton")
-bindToggle(displayToggles.headDot, "showHeadDot")
-bindToggle(displayToggles.focus, "showFocusTarget")
-bindToggle(displayToggles.boxes, "showBoxes")
-bindToggle(displayToggles.targetCard, "showTargetCard")
-bindToggle(displayToggles.targetCardCompact, "targetCardCompact")
+bindToggle(miniHudLabels.utility.controls.enabledToggle, "enabled")
+bindToggle(miniHudLabels.utility.displayToggles.names, "showNames")
+bindToggle(miniHudLabels.utility.displayToggles.distance, "showDistance")
+bindToggle(miniHudLabels.utility.displayToggles.fade, "distanceFade")
+bindToggle(miniHudLabels.utility.displayToggles.health, "showHealth")
+bindToggle(miniHudLabels.utility.displayToggles.weapon, "showWeapon")
+bindToggle(miniHudLabels.utility.displayToggles.skeleton, "showSkeleton")
+bindToggle(miniHudLabels.utility.displayToggles.headDot, "showHeadDot")
+bindToggle(miniHudLabels.utility.displayToggles.focus, "showFocusTarget")
+bindToggle(miniHudLabels.utility.displayToggles.boxes, "showBoxes")
+bindToggle(miniHudLabels.utility.displayToggles.targetCard, "showTargetCard")
+bindToggle(miniHudLabels.utility.displayToggles.targetCardCompact, "targetCardCompact")
 bindToggle(tracerSliders.visibilityToggle, "visibilityCheck")
 bindToggle(tracerSliders.tracersToggle, "showTracers")
 bindToggle(tracerSliders.focusLock, "focusLock")
 bindToggle(tracerSliders.lookDirectionToggle, "showLookDirection")
 bindToggle(tracerSliders.crosshairToggle, "showCrosshair")
 bindToggle(tracerSliders.fovCircleToggle, "showFovCircle")
-bindToggle(miniHudToggle, "showMiniHud")
+bindToggle(miniHudLabels.utility.controls.miniHudToggle, "showMiniHud")
 bindToggle(viewButtons.removeZoomLimit, "removeZoomLimit")
+bindToggle(playerButtons.walkSpeedToggle, "walkSpeedEnabled")
+bindToggle(playerButtons.noclip, "noclip")
+bindToggle(playerButtons.fly, "fly")
+bindToggle(playerButtons.clickTeleport, "clickTeleport")
 bindToggle(miniHudLabels.utility.antiAfk, "antiAfk")
 bindToggle(miniHudLabels.utility.autoLoadGamePreset, "autoLoadGamePreset")
-bindToggle(performanceToggles.mode, "performanceMode")
-bindToggle(performanceToggles.materials, "simplifyMaterials")
-bindToggle(performanceToggles.textures, "hideTextures")
-bindToggle(performanceToggles.effects, "hideEffects")
-bindToggle(performanceToggles.shadows, "disableShadows")
+bindToggle(miniHudLabels.utility.performanceToggles.mode, "performanceMode")
+bindToggle(miniHudLabels.utility.performanceToggles.materials, "simplifyMaterials")
+bindToggle(miniHudLabels.utility.performanceToggles.textures, "hideTextures")
+bindToggle(miniHudLabels.utility.performanceToggles.effects, "hideEffects")
+bindToggle(miniHudLabels.utility.performanceToggles.shadows, "disableShadows")
 
 for configKey, button in pairs({
-	enabled = enabledToggle,
-	showNames = displayToggles.names,
-	showDistance = displayToggles.distance,
-	distanceFade = displayToggles.fade,
-	showHealth = displayToggles.health,
-	showWeapon = displayToggles.weapon,
-	showSkeleton = displayToggles.skeleton,
-	showHeadDot = displayToggles.headDot,
-	showFocusTarget = displayToggles.focus,
-	showBoxes = displayToggles.boxes,
-	showTargetCard = displayToggles.targetCard,
-	targetCardCompact = displayToggles.targetCardCompact,
+	enabled = miniHudLabels.utility.controls.enabledToggle,
+	showNames = miniHudLabels.utility.displayToggles.names,
+	showDistance = miniHudLabels.utility.displayToggles.distance,
+	distanceFade = miniHudLabels.utility.displayToggles.fade,
+	showHealth = miniHudLabels.utility.displayToggles.health,
+	showWeapon = miniHudLabels.utility.displayToggles.weapon,
+	showSkeleton = miniHudLabels.utility.displayToggles.skeleton,
+	showHeadDot = miniHudLabels.utility.displayToggles.headDot,
+	showFocusTarget = miniHudLabels.utility.displayToggles.focus,
+	showBoxes = miniHudLabels.utility.displayToggles.boxes,
+	showTargetCard = miniHudLabels.utility.displayToggles.targetCard,
+	targetCardCompact = miniHudLabels.utility.displayToggles.targetCardCompact,
 	visibilityCheck = tracerSliders.visibilityToggle,
 	showTracers = tracerSliders.tracersToggle,
 	focusLock = tracerSliders.focusLock,
 	showLookDirection = tracerSliders.lookDirectionToggle,
 	showCrosshair = tracerSliders.crosshairToggle,
 	showFovCircle = tracerSliders.fovCircleToggle,
-	showMiniHud = miniHudToggle,
+	showMiniHud = miniHudLabels.utility.controls.miniHudToggle,
 	removeZoomLimit = viewButtons.removeZoomLimit,
+	walkSpeedEnabled = playerButtons.walkSpeedToggle,
+	noclip = playerButtons.noclip,
+	fly = playerButtons.fly,
+	clickTeleport = playerButtons.clickTeleport,
 	antiAfk = miniHudLabels.utility.antiAfk,
 	autoLoadGamePreset = miniHudLabels.utility.autoLoadGamePreset,
-	performanceMode = performanceToggles.mode,
-	simplifyMaterials = performanceToggles.materials,
-	hideTextures = performanceToggles.textures,
-	hideEffects = performanceToggles.effects,
-	disableShadows = performanceToggles.shadows,
+	performanceMode = miniHudLabels.utility.performanceToggles.mode,
+	simplifyMaterials = miniHudLabels.utility.performanceToggles.materials,
+	hideTextures = miniHudLabels.utility.performanceToggles.textures,
+	hideEffects = miniHudLabels.utility.performanceToggles.effects,
+	disableShadows = miniHudLabels.utility.performanceToggles.shadows,
 }) do
 	keybindState.toggleButtonsByConfig[configKey] = button
 end
@@ -5097,12 +6173,17 @@ do
 			gui = gui,
 			keyCodeToText = keyCodeToText,
 			keyTextToKeyCode = keyTextToKeyCode,
+			makeOverlayDraggable = overlayTools and overlayTools.makeOverlayDraggable or nil,
 			makeLabel = makeLabel,
+			resetOverlayPosition = overlayTools and overlayTools.resetOverlayPosition or nil,
 			saveSettings = saveSettings,
 			setToggleState = setToggleState,
 			showToast = showToast,
 			theme = THEME,
 			toggleFreeCam = toggleFreeCam,
+			isUiReady = function()
+				return uiReady
+			end,
 			userInputService = UserInputService,
 			viewState = viewState,
 		})
@@ -5110,28 +6191,82 @@ do
 	end
 end
 
-compactToggle.MouseButton1Click:Connect(function()
-	applyCompactMode(not CONFIG.compactMode)
-	setToggleState(compactToggle, CONFIG.compactMode)
+miniHudLabels.utility.controls.minimalToggle.MouseButton1Click:Connect(function()
+	applyMinimalMode(not CONFIG.minimalMode)
+	setToggleState(miniHudLabels.utility.controls.minimalToggle, CONFIG.minimalMode)
 	setMinimized(uiMinimized)
-	showToast("Setting Updated", string.format("%s %s", "Compact Mode", CONFIG.compactMode and "enabled" or "disabled"), CONFIG.compactMode and THEME.accent or THEME.muted)
+	showToast("Setting Updated", string.format("%s %s", "Minimal Mode", CONFIG.minimalMode and "enabled" or "disabled"), CONFIG.minimalMode and THEME.accent or THEME.muted)
 end)
+if overlayTools and miniHudLabels.utility.updatePanel.check then
+	overlayTools.bindUpdatePanel(miniHudLabels.utility.updatePanel)
+end
+
+function setPresetDropdownOpen(isOpen)
+	local dropdown = miniHudLabels.utility.controls.presetDropdown
+	if not dropdown then
+		return
+	end
+	dropdown.open = isOpen
+	dropdown.list.Visible = isOpen
+	dropdown.row.Size = UDim2.new(1, 0, 0, isOpen and dropdown.openHeight or dropdown.closedHeight)
+	dropdown.arrow.Text = isOpen and "^" or "v"
+end
+
+function refreshPresetDropdown()
+	local dropdown = miniHudLabels.utility.controls.presetDropdown
+	if not dropdown then
+		return
+	end
+	dropdown.button.Text = PRESETS[currentPresetIndex].name
+	dropdown.arrow.Text = dropdown.open and "^" or "v"
+	for index, option in ipairs(dropdown.options or {}) do
+		local selected = index == currentPresetIndex
+		option.BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(31, 36, 48)
+		option.TextColor3 = selected and THEME.text or THEME.muted
+		local stroke = option:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Transparency = selected and 0.2 or 0.45
+		end
+	end
+end
+
+updateControlAvailability = function()
+	setRowEnabled(miniHudLabels.utility.displayToggles.boxMode, CONFIG.showBoxes)
+	setRowEnabled(miniHudLabels.utility.displayToggles.headDotSize.bar, CONFIG.showHeadDot)
+	setRowEnabled(miniHudLabels.utility.displayToggles.targetCardCompact, CONFIG.showTargetCard)
+	setRowEnabled(miniHudLabels.utility.displayToggles.textStack, CONFIG.showTargetCard)
+	setRowEnabled(tracerSliders.tracerOriginButton, CONFIG.showTracers)
+	setRowEnabled(tracerSliders.style, CONFIG.showTracers)
+	setRowEnabled(tracerSliders.thickness.bar, CONFIG.showTracers)
+	setRowEnabled(tracerSliders.transparency.bar, CONFIG.showTracers)
+	setRowEnabled(tracerSliders.crosshairStyleButton, CONFIG.showCrosshair)
+	setRowEnabled(crosshairColorButtons[1].button.Parent.Parent, CONFIG.showCrosshair)
+	setRowEnabled(tracerSliders.crosshairThickness.bar, CONFIG.showCrosshair)
+	setRowEnabled(tracerSliders.crosshairSizeSlider.bar, CONFIG.showCrosshair)
+	setRowEnabled(tracerSliders.crosshairGap.bar, CONFIG.showCrosshair)
+	setRowEnabled(tracerSliders.fovCircleSlider.bar, CONFIG.showFovCircle)
+	setRowEnabled(tracerSliders.fovThickness.bar, CONFIG.showFovCircle)
+	setRowEnabled(tracerSliders.fovTransparency.bar, CONFIG.showFovCircle)
+	setRowEnabled(tracerSliders.fovCircleSlider.reset, CONFIG.showFovCircle)
+	setRowEnabled(playerButtons.walkSpeed.bar, CONFIG.walkSpeedEnabled)
+	setRowEnabled(playerButtons.flySpeed.bar, CONFIG.fly)
+end
 
 syncUiFromConfig = function()
-	setToggleState(enabledToggle, CONFIG.enabled)
-	setToggleState(displayToggles.names, CONFIG.showNames)
-	setToggleState(displayToggles.distance, CONFIG.showDistance)
-	setToggleState(displayToggles.fade, CONFIG.distanceFade)
-	setToggleState(displayToggles.health, CONFIG.showHealth)
-	setToggleState(displayToggles.weapon, CONFIG.showWeapon)
-	setToggleState(displayToggles.skeleton, CONFIG.showSkeleton)
-	setToggleState(displayToggles.headDot, CONFIG.showHeadDot)
-	setSliderState(displayToggles.headDotSize, CONFIG.headDotSize)
-	setToggleState(displayToggles.focus, CONFIG.showFocusTarget)
-	setToggleState(displayToggles.boxes, CONFIG.showBoxes)
-	setToggleState(displayToggles.targetCard, CONFIG.showTargetCard)
-	setToggleState(displayToggles.targetCardCompact, CONFIG.targetCardCompact)
-	displayToggles.textStack.Text = CONFIG.textStackMode
+	setToggleState(miniHudLabels.utility.controls.enabledToggle, CONFIG.enabled)
+	setToggleState(miniHudLabels.utility.displayToggles.names, CONFIG.showNames)
+	setToggleState(miniHudLabels.utility.displayToggles.distance, CONFIG.showDistance)
+	setToggleState(miniHudLabels.utility.displayToggles.fade, CONFIG.distanceFade)
+	setToggleState(miniHudLabels.utility.displayToggles.health, CONFIG.showHealth)
+	setToggleState(miniHudLabels.utility.displayToggles.weapon, CONFIG.showWeapon)
+	setToggleState(miniHudLabels.utility.displayToggles.skeleton, CONFIG.showSkeleton)
+	setToggleState(miniHudLabels.utility.displayToggles.headDot, CONFIG.showHeadDot)
+	setSliderState(miniHudLabels.utility.displayToggles.headDotSize, CONFIG.headDotSize)
+	setToggleState(miniHudLabels.utility.displayToggles.focus, CONFIG.showFocusTarget)
+	setToggleState(miniHudLabels.utility.displayToggles.boxes, CONFIG.showBoxes)
+	setToggleState(miniHudLabels.utility.displayToggles.targetCard, CONFIG.showTargetCard)
+	setToggleState(miniHudLabels.utility.displayToggles.targetCardCompact, CONFIG.targetCardCompact)
+	miniHudLabels.utility.displayToggles.textStack.Text = CONFIG.textStackMode
 	tracerSliders.threatMode.Text = CONFIG.threatMode
 	setToggleState(tracerSliders.visibilityToggle, CONFIG.visibilityCheck)
 	setToggleState(tracerSliders.tracersToggle, CONFIG.showTracers)
@@ -5146,54 +6281,75 @@ syncUiFromConfig = function()
 	setToggleState(tracerSliders.lookDirectionToggle, CONFIG.showLookDirection)
 	setToggleState(tracerSliders.crosshairToggle, CONFIG.showCrosshair)
 	setToggleState(tracerSliders.fovCircleToggle, CONFIG.showFovCircle)
-	setToggleState(miniHudToggle, CONFIG.showMiniHud)
+	setToggleState(miniHudLabels.utility.controls.miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(viewButtons.removeZoomLimit, CONFIG.removeZoomLimit)
+	setToggleState(playerButtons.walkSpeedToggle, CONFIG.walkSpeedEnabled)
+	setToggleState(playerButtons.noclip, CONFIG.noclip)
+	setToggleState(playerButtons.fly, CONFIG.fly)
+	setToggleState(playerButtons.clickTeleport, CONFIG.clickTeleport)
 	setToggleState(miniHudLabels.utility.antiAfk, CONFIG.antiAfk)
 	setToggleState(miniHudLabels.utility.autoLoadGamePreset, CONFIG.autoLoadGamePreset)
-	setToggleState(performanceToggles.mode, CONFIG.performanceMode)
-	setToggleState(performanceToggles.materials, CONFIG.simplifyMaterials)
-	setToggleState(performanceToggles.textures, CONFIG.hideTextures)
-	setToggleState(performanceToggles.effects, CONFIG.hideEffects)
-	setToggleState(performanceToggles.shadows, CONFIG.disableShadows)
-	setToggleState(compactToggle, CONFIG.compactMode)
+	setToggleState(miniHudLabels.utility.performanceToggles.mode, CONFIG.performanceMode)
+	setToggleState(miniHudLabels.utility.performanceToggles.materials, CONFIG.simplifyMaterials)
+	setToggleState(miniHudLabels.utility.performanceToggles.textures, CONFIG.hideTextures)
+	setToggleState(miniHudLabels.utility.performanceToggles.effects, CONFIG.hideEffects)
+	setToggleState(miniHudLabels.utility.performanceToggles.shadows, CONFIG.disableShadows)
+	setToggleState(miniHudLabels.utility.controls.minimalToggle, CONFIG.minimalMode)
+	refreshPresetDropdown()
+	applyMinimalMode(CONFIG.minimalMode, true)
+	updateControlAvailability()
 	setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
-	setSliderState(cameraFovSlider, CONFIG.cameraFov)
+	setSliderState(miniHudLabels.utility.controls.cameraFovSlider, CONFIG.cameraFov)
+	setSliderState(playerButtons.walkSpeed, CONFIG.walkSpeed)
+	setSliderState(playerButtons.flySpeed, CONFIG.flySpeed)
 	tracerSliders.crosshairStyleButton.Text = string.format("< %s >", CONFIG.crosshairStyle)
 	setOptionButtonsState(crosshairColorButtons, CONFIG.crosshairColor)
 	setSliderState(tracerSliders.crosshairThickness, CONFIG.crosshairThickness)
 	setSliderState(tracerSliders.crosshairSizeSlider, CONFIG.crosshairSize)
 	setSliderState(tracerSliders.crosshairGap, CONFIG.crosshairGap)
-	displayToggles.boxMode.Text = getEffectiveBoxMode()
-	presetButton.Text = PRESETS[currentPresetIndex].name
+	miniHudLabels.utility.displayToggles.boxMode.Text = getEffectiveBoxMode()
 	miniHudLabels.saveStatusValue.Text = canUseFileApi() and "AUTO SAVE" or "MEMORY"
-	miniHud.Visible = CONFIG.showMiniHud
+	watermark.Visible = uiReady and not CONFIG.minimalMode
+	miniHud.Visible = uiReady and CONFIG.showMiniHud
+	if overlayTools then
+		overlayTools.updateReleasePanel(miniHudLabels.utility.updatePanel)
+	end
 	updateViewUi()
 end
 
-presetButton.MouseButton1Click:Connect(function()
-	currentPresetIndex = currentPresetIndex % #PRESETS + 1
-	PRESETS[currentPresetIndex].apply()
-	syncUiFromConfig()
-	applyPerformanceSettings()
-	refreshAllEsp()
-	saveSettings()
+miniHudLabels.utility.controls.presetDropdown.arrow.MouseButton1Click:Connect(function()
+	setPresetDropdownOpen(not miniHudLabels.utility.controls.presetDropdown.open)
 end)
 
-displayToggles.boxMode.MouseButton1Click:Connect(function()
+for index, option in ipairs(miniHudLabels.utility.controls.presetDropdown.options) do
+	miniHudLabels.bindTooltip(option, PRESETS[index].description or PRESETS[index].name)
+	option.MouseButton1Click:Connect(function()
+		currentPresetIndex = index
+		PRESETS[currentPresetIndex].apply()
+		setPresetDropdownOpen(false)
+		syncUiFromConfig()
+		applyPerformanceSettings()
+		refreshAllEsp()
+		saveSettings()
+		showToast("Preset", string.format("%s applied", PRESETS[currentPresetIndex].name), THEME.accent)
+	end)
+end
+
+miniHudLabels.utility.displayToggles.boxMode.MouseButton1Click:Connect(function()
 	local currentIndex = table.find(BOX_MODE_OPTIONS, CONFIG.boxMode) or 1
 	currentIndex = currentIndex % #BOX_MODE_OPTIONS + 1
 	CONFIG.boxMode = BOX_MODE_OPTIONS[currentIndex]
-	displayToggles.boxMode.Text = CONFIG.boxMode
+	miniHudLabels.utility.displayToggles.boxMode.Text = CONFIG.boxMode
 	refreshAllEsp()
 	saveSettings()
 end)
 
-displayToggles.textStack.MouseButton1Click:Connect(function()
+miniHudLabels.utility.displayToggles.textStack.MouseButton1Click:Connect(function()
 	local options = { "Inline", "Stacked" }
 	local currentIndex = table.find(options, CONFIG.textStackMode) or 1
 	currentIndex = currentIndex % #options + 1
 	CONFIG.textStackMode = options[currentIndex]
-	displayToggles.textStack.Text = CONFIG.textStackMode
+	miniHudLabels.utility.displayToggles.textStack.Text = CONFIG.textStackMode
 	refreshAllEsp()
 	saveSettings()
 end)
@@ -5230,9 +6386,9 @@ tracerSliders.style.MouseButton1Click:Connect(function()
 	showToast("Setting Updated", string.format("Tracer Style set to %s", CONFIG.tracerStyle), THEME.accent)
 end)
 
-cameraFovSlider.reset.MouseButton1Click:Connect(function()
+miniHudLabels.utility.controls.cameraFovSlider.reset.MouseButton1Click:Connect(function()
 	CONFIG.cameraFov = DEFAULT_CAMERA_FOV
-	setSliderState(cameraFovSlider, CONFIG.cameraFov)
+	setSliderState(miniHudLabels.utility.controls.cameraFovSlider, CONFIG.cameraFov)
 	applyCameraFov()
 	saveSettings()
 	showToast("Camera FOV Reset", string.format("Camera %d", CONFIG.cameraFov), THEME.accent)
@@ -5412,6 +6568,14 @@ viewButtons.reset.MouseButton1Click:Connect(function()
 	showToast("View Reset", string.format("Freecam speed %d", CONFIG.freeCamSpeed), THEME.accent)
 end)
 
+playerButtons.reset.MouseButton1Click:Connect(function()
+	resetPlayerSettings()
+	stopFly()
+	syncUiFromConfig()
+	saveSettings()
+	showToast("Player Reset", "Movement settings restored", THEME.accent)
+end)
+
 for _, entry in ipairs(crosshairColorButtons) do
 	entry.button.MouseButton1Click:Connect(function()
 		CONFIG.crosshairColor = entry.value
@@ -5520,15 +6684,15 @@ do
 	local draggingHeadDotSize = false
 
 	local function updateHeadDotSizeFromX(positionX)
-		local bar = displayToggles.headDotSize.bar
+		local bar = miniHudLabels.utility.displayToggles.headDotSize.bar
 		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
 		local alpha = 0
 		if bar.AbsoluteSize.X > 0 then
 			alpha = relative / bar.AbsoluteSize.X
 		end
 
-		local value = math.floor(displayToggles.headDotSize.min + ((displayToggles.headDotSize.max - displayToggles.headDotSize.min) * alpha) + 0.5)
-		value = math.clamp(value, displayToggles.headDotSize.min, displayToggles.headDotSize.max)
+		local value = math.floor(miniHudLabels.utility.displayToggles.headDotSize.min + ((miniHudLabels.utility.displayToggles.headDotSize.max - miniHudLabels.utility.displayToggles.headDotSize.min) * alpha) + 0.5)
+		value = math.clamp(value, miniHudLabels.utility.displayToggles.headDotSize.min, miniHudLabels.utility.displayToggles.headDotSize.max)
 
 		if CONFIG.headDotSize ~= value then
 			CONFIG.headDotSize = value
@@ -5537,17 +6701,17 @@ do
 			showToast("Setting Updated", string.format("Head Dot Size set to %d", CONFIG.headDotSize), THEME.accent)
 		end
 
-		setSliderState(displayToggles.headDotSize, CONFIG.headDotSize)
+		setSliderState(miniHudLabels.utility.displayToggles.headDotSize, CONFIG.headDotSize)
 	end
 
-	displayToggles.headDotSize.bar.InputBegan:Connect(function(input)
+	miniHudLabels.utility.displayToggles.headDotSize.bar.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingHeadDotSize = true
 			updateHeadDotSizeFromX(input.Position.X)
 		end
 	end)
 
-	displayToggles.headDotSize.bar.InputEnded:Connect(function(input)
+	miniHudLabels.utility.displayToggles.headDotSize.bar.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingHeadDotSize = false
 		end
@@ -5565,12 +6729,12 @@ do
 		end
 	end)
 
-	bindSliderValueInput(displayToggles.headDotSize, function(typedValue)
+	bindSliderValueInput(miniHudLabels.utility.displayToggles.headDotSize, function(typedValue)
 		if typedValue == nil then
 			return CONFIG.headDotSize
 		end
 
-		return math.clamp(math.floor(typedValue + 0.5), displayToggles.headDotSize.min, displayToggles.headDotSize.max)
+		return math.clamp(math.floor(typedValue + 0.5), miniHudLabels.utility.displayToggles.headDotSize.min, miniHudLabels.utility.displayToggles.headDotSize.max)
 	end, function(nextValue)
 		if CONFIG.headDotSize ~= nextValue then
 			CONFIG.headDotSize = nextValue
@@ -5653,6 +6817,11 @@ miniHudLabels.utility.importConfig.MouseButton1Click:Connect(function()
 	refreshAllEsp()
 	saveSettings()
 	showToast("Settings", "Config imported", THEME.accent)
+end)
+
+miniHudLabels.utility.resetPositions.MouseButton1Click:Connect(function()
+	resetOverlayPositions()
+	showToast("Settings", "Overlay positions reset", THEME.accent)
 end)
 
 miniHudLabels.utility.resetDisplay.MouseButton1Click:Connect(function()
@@ -5824,15 +6993,15 @@ do
 	local draggingCameraFov = false
 
 	local function updateCameraFovFromX(positionX)
-		local bar = cameraFovSlider.bar
+		local bar = miniHudLabels.utility.controls.cameraFovSlider.bar
 		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
 		local alpha = 0
 		if bar.AbsoluteSize.X > 0 then
 			alpha = relative / bar.AbsoluteSize.X
 		end
 
-		local value = math.floor(cameraFovSlider.min + ((cameraFovSlider.max - cameraFovSlider.min) * alpha) + 0.5)
-		value = math.clamp(value, cameraFovSlider.min, cameraFovSlider.max)
+		local value = math.floor(miniHudLabels.utility.controls.cameraFovSlider.min + ((miniHudLabels.utility.controls.cameraFovSlider.max - miniHudLabels.utility.controls.cameraFovSlider.min) * alpha) + 0.5)
+		value = math.clamp(value, miniHudLabels.utility.controls.cameraFovSlider.min, miniHudLabels.utility.controls.cameraFovSlider.max)
 
 		if CONFIG.cameraFov ~= value then
 			CONFIG.cameraFov = value
@@ -5840,17 +7009,17 @@ do
 			saveSettings()
 		end
 
-		setSliderState(cameraFovSlider, CONFIG.cameraFov)
+		setSliderState(miniHudLabels.utility.controls.cameraFovSlider, CONFIG.cameraFov)
 	end
 
-	cameraFovSlider.bar.InputBegan:Connect(function(input)
+	miniHudLabels.utility.controls.cameraFovSlider.bar.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingCameraFov = true
 			updateCameraFovFromX(input.Position.X)
 		end
 	end)
 
-	cameraFovSlider.bar.InputEnded:Connect(function(input)
+	miniHudLabels.utility.controls.cameraFovSlider.bar.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			draggingCameraFov = false
 		end
@@ -5868,12 +7037,12 @@ do
 		end
 	end)
 
-	bindSliderValueInput(cameraFovSlider, function(typedValue)
+	bindSliderValueInput(miniHudLabels.utility.controls.cameraFovSlider, function(typedValue)
 		if typedValue == nil then
 			return CONFIG.cameraFov
 		end
 
-		return math.clamp(math.floor(typedValue + 0.5), cameraFovSlider.min, cameraFovSlider.max)
+		return math.clamp(math.floor(typedValue + 0.5), miniHudLabels.utility.controls.cameraFovSlider.min, miniHudLabels.utility.controls.cameraFovSlider.max)
 	end, function(nextValue)
 		if CONFIG.cameraFov ~= nextValue then
 			CONFIG.cameraFov = nextValue
@@ -6033,6 +7202,77 @@ do
 	end)
 end
 
+do
+	local draggingPlayerSlider = nil
+
+	local function updatePlayerSlider(entry, positionX)
+		local slider = entry.slider
+		local bar = slider.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+
+		local value = math.floor(slider.min + ((slider.max - slider.min) * alpha) + 0.5)
+		value = math.clamp(value, slider.min, slider.max)
+
+		if CONFIG[entry.key] ~= value then
+			CONFIG[entry.key] = value
+			saveSettings()
+			applyPlayerMovementState()
+			updateViewUi()
+		end
+
+		setSliderState(slider, CONFIG[entry.key])
+	end
+
+	for _, entry in ipairs({
+		{ slider = playerButtons.walkSpeed, key = "walkSpeed" },
+		{ slider = playerButtons.flySpeed, key = "flySpeed" },
+	}) do
+		entry.slider.bar.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				draggingPlayerSlider = entry
+				updatePlayerSlider(entry, input.Position.X)
+			end
+		end)
+
+		entry.slider.bar.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				draggingPlayerSlider = nil
+			end
+		end)
+
+		bindSliderValueInput(entry.slider, function(typedValue)
+			if typedValue == nil then
+				return CONFIG[entry.key]
+			end
+
+			return math.clamp(math.floor(typedValue + 0.5), entry.slider.min, entry.slider.max)
+		end, function(nextValue)
+			if CONFIG[entry.key] ~= nextValue then
+				CONFIG[entry.key] = nextValue
+				saveSettings()
+				applyPlayerMovementState()
+				updateViewUi()
+			end
+		end)
+	end
+
+	UserInputService.InputChanged:Connect(function(input)
+		if draggingPlayerSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updatePlayerSlider(draggingPlayerSlider, input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			draggingPlayerSlider = nil
+		end
+	end)
+end
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
@@ -6046,10 +7286,22 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 
-	if viewState.freeCamEnabled then
+	if CONFIG.clickTeleport and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		local root = getLocalRoot()
+		local mouse = LOCAL_PLAYER and LOCAL_PLAYER:GetMouse()
+		if root and mouse and mouse.Hit then
+			root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+			showToast("Player", "Teleported", THEME.accent)
+			return
+		end
+	end
+
+	if viewState.freeCamEnabled or CONFIG.fly then
 		if input.UserInputType == Enum.UserInputType.MouseButton2 then
-			viewState.lookHeld = true
-			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+			if viewState.freeCamEnabled then
+				viewState.lookHeld = true
+				UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+			end
 		elseif input.KeyCode == Enum.KeyCode.W then
 			viewState.moveForward = 1
 		elseif input.KeyCode == Enum.KeyCode.S then
@@ -6062,7 +7314,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 			viewState.moveUp = 1
 		elseif input.KeyCode == Enum.KeyCode.LeftControl then
 			viewState.moveUp = -1
-		elseif input.KeyCode == Enum.KeyCode.Escape then
+		elseif input.KeyCode == Enum.KeyCode.Escape and viewState.freeCamEnabled then
 			toggleFreeCam()
 			return
 		end
@@ -6070,7 +7322,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
 	if input.KeyCode == CONFIG.quickHideKey then
 		window.Visible = not window.Visible
-		miniHud.Visible = window.Visible and CONFIG.showMiniHud
+		watermark.Visible = uiReady and window.Visible and not CONFIG.minimalMode
+		miniHud.Visible = uiReady and window.Visible and CONFIG.showMiniHud
 		showToast("Menu", window.Visible and "Menu shown" or "Menu hidden", window.Visible and THEME.accent or THEME.muted)
 	elseif input.KeyCode == CONFIG.uiToggleKey then
 		gui.Enabled = not gui.Enabled
@@ -6148,6 +7401,62 @@ RunService.RenderStepped:Connect(function(deltaTime)
 		viewState.freeCamCFrame = CFrame.new(position) * rotation
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CFrame = viewState.freeCamCFrame
+	elseif CONFIG.fly and camera then
+		local root = getLocalRoot()
+		local humanoid = getLocalHumanoid()
+		if root and humanoid then
+			local forward = camera.CFrame.LookVector
+			if forward.Magnitude < 0.001 then
+				forward = root.CFrame.LookVector
+			end
+			forward = forward.Unit
+
+			local right = camera.CFrame.RightVector
+			if right.Magnitude < 0.001 then
+				right = root.CFrame.RightVector
+			end
+			right = right.Unit
+
+			local inputVelocity = (right * viewState.moveRight) + (Vector3.yAxis * viewState.moveUp) + (forward * viewState.moveForward)
+			if inputVelocity.Magnitude > 1 then
+				inputVelocity = inputVelocity.Unit
+			end
+
+			local speedMultiplier = 1
+			if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+				speedMultiplier = FLY_BOOST_MULTIPLIER
+			elseif UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) then
+				speedMultiplier = FLY_PRECISION_MULTIPLIER
+			end
+
+			local targetVelocity = inputVelocity * (CONFIG.flySpeed * speedMultiplier)
+			local currentVelocity = viewState.flyVelocity or root.AssemblyLinearVelocity
+			local blendSpeed = targetVelocity.Magnitude > currentVelocity.Magnitude and FLY_ACCELERATION or FLY_DECELERATION
+			local alpha = math.clamp(deltaTime * blendSpeed, 0, 1)
+			local blendedVelocity = currentVelocity:Lerp(targetVelocity, alpha)
+			if targetVelocity.Magnitude < 0.01 and blendedVelocity.Magnitude < 1 then
+				blendedVelocity = Vector3.zero
+			end
+
+			viewState.flyVelocity = blendedVelocity
+			root.AssemblyLinearVelocity = blendedVelocity
+			root.AssemblyAngularVelocity = Vector3.zero
+			humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+			humanoid.PlatformStand = false
+			humanoid.AutoRotate = false
+
+			local visualDirection = blendedVelocity
+			if visualDirection.Magnitude > 0.05 then
+				viewState.flyLookVector = visualDirection.Unit
+			else
+				viewState.flyLookVector = forward
+			end
+
+			if viewState.flyLookVector and viewState.flyLookVector.Magnitude > 0.05 then
+				local targetCFrame = CFrame.lookAt(root.Position, root.Position + viewState.flyLookVector, Vector3.yAxis)
+				root.CFrame = root.CFrame:Lerp(targetCFrame, math.clamp(deltaTime * 14, 0, 1))
+			end
+		end
 	elseif viewState.spectateTarget then
 		local targetCharacter = viewState.spectateTarget.Character
 		local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
@@ -6159,6 +7468,10 @@ RunService.RenderStepped:Connect(function(deltaTime)
 		else
 			setSpectateTarget(nil)
 		end
+	end
+
+	if not CONFIG.fly and not viewState.freeCamEnabled then
+		applyPlayerMovementState()
 	end
 
 	if gui.Enabled then

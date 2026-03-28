@@ -10,12 +10,12 @@ return function(context)
 	local featureDefs = {
 		{ id = "freeCam", label = "Free Cam" },
 		{ id = "focusLock", label = "Focus Lock" },
-		{ id = "showTracers", label = "Tracers" },
-		{ id = "showCrosshair", label = "Crosshair" },
-		{ id = "showFovCircle", label = "FOV Circle" },
 		{ id = "showTargetCard", label = "Target Card" },
 		{ id = "showMiniHud", label = "Mini HUD" },
 		{ id = "showLookDirection", label = "Look Dir" },
+		{ id = "showTracers", label = "Tracers" },
+		{ id = "showCrosshair", label = "Crosshair" },
+		{ id = "showFovCircle", label = "FOV Circle" },
 	}
 
 	local MODE_VALUES = { "Toggle", "Hold" }
@@ -29,6 +29,7 @@ return function(context)
 		listening = nil,
 		rows = {},
 		modeButtons = {},
+		enabledButton = nil,
 		displayButton = nil,
 		menu = nil,
 		list = nil,
@@ -177,6 +178,12 @@ return function(context)
 		return context.userInputService and context.userInputService:GetFocusedTextBox() ~= nil
 	end
 
+	local function releaseAllHeld()
+		for _, def in ipairs(featureDefs) do
+			release(def.id)
+		end
+	end
+
 	local function cycleMode(currentMode)
 		for index, value in ipairs(MODE_VALUES) do
 			if value == currentMode then
@@ -211,6 +218,14 @@ return function(context)
 				context.setToggleState(state.displayButton, context.config.showKeybindsUi)
 			else
 				state.displayButton.Text = context.config.showKeybindsUi and "ON" or "OFF"
+			end
+		end
+
+		if state.enabledButton then
+			if context.setToggleState then
+				context.setToggleState(state.enabledButton, context.config.keybindsEnabled)
+			else
+				state.enabledButton.Text = context.config.keybindsEnabled and "ON" or "OFF"
 			end
 		end
 	end
@@ -269,8 +284,12 @@ return function(context)
 		local activeEntries = getActiveEntries()
 		local assignedEntries = getAssignedEntries()
 		local showMenu = #activeEntries > 0 or #assignedEntries > 0
-		state.menu.Visible = context.gui.Enabled and context.config.showKeybindsUi and showMenu
-		state.count.Text = string.format("%d ACTIVE", #activeEntries)
+		local allowVisible = true
+		if context.isUiReady then
+			allowVisible = context.isUiReady()
+		end
+		state.menu.Visible = allowVisible and context.gui.Enabled and context.config.showKeybindsUi and showMenu
+		state.count.Text = context.config.keybindsEnabled and string.format("%d ACTIVE", #activeEntries) or "DISABLED"
 
 		local menuHeight = 42
 
@@ -384,6 +403,17 @@ return function(context)
 		title.Size = UDim2.new(0, 100, 0, 14)
 		title.ZIndex = 13
 
+		local dragHandle = context.create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 0, 0, 0),
+			Size = UDim2.new(1, 0, 0, 24),
+			Text = "",
+			ZIndex = 14,
+			Parent = menu,
+		})
+
 		local count = context.create("TextLabel", {
 			AnchorPoint = Vector2.new(1, 0),
 			BackgroundColor3 = context.theme.accentSoft,
@@ -418,6 +448,9 @@ return function(context)
 		state.list = list
 		state.title = title
 		state.count = count
+		if context.makeOverlayDraggable then
+			context.makeOverlayDraggable(menu, "keybindPanel", dragHandle)
+		end
 	end
 
 	local function assignKeybind(featureId, newText)
@@ -460,10 +493,50 @@ return function(context)
 	end
 
 	local function buildRows(parent)
-		local _, headerValue = context.createStatusRow(parent, "BINDS", "PRESS KEY")
+		local pairIndex = 0
+		local function styleSection(row, accentColor)
+			if not row then
+				return
+			end
+			row.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
+			local stroke = row:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Color = accentColor or context.theme.border
+				stroke.Transparency = 0.28
+			end
+		end
+
+		local function styleBindRow(row, isModeRow)
+			if not row then
+				return
+			end
+			local toneA = isModeRow and Color3.fromRGB(24, 28, 38) or Color3.fromRGB(30, 34, 45)
+			local toneB = isModeRow and Color3.fromRGB(21, 25, 34) or Color3.fromRGB(26, 30, 40)
+			row.BackgroundColor3 = (pairIndex % 2 == 0) and toneA or toneB
+			local stroke = row:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = isModeRow and 0.52 or 0.4
+			end
+		end
+
+		local _, headerValue = context.createStatusRow(parent, "BINDS", "PRESS / DEL / RMB")
 		headerValue.TextColor3 = context.theme.accent
 
-		local _, displayButton = context.createToggleRow(parent, "DISPLAY PANEL", context.config.showKeybindsUi)
+		local enabledRow, enabledButton = context.createToggleRow(parent, "KEYBINDS ENABLED", context.config.keybindsEnabled)
+		styleSection(enabledRow, context.theme.accent)
+		state.enabledButton = enabledButton
+		enabledButton.MouseButton1Click:Connect(function()
+			context.config.keybindsEnabled = not context.config.keybindsEnabled
+			if not context.config.keybindsEnabled then
+				releaseAllHeld()
+			end
+			context.saveSettings()
+			refreshRows()
+			updateMenu()
+		end)
+
+		local displayRow, displayButton = context.createToggleRow(parent, "DISPLAY PANEL", context.config.showKeybindsUi)
+		styleSection(displayRow, context.theme.border)
 		state.displayButton = displayButton
 		displayButton.MouseButton1Click:Connect(function()
 			context.config.showKeybindsUi = not context.config.showKeybindsUi
@@ -472,15 +545,30 @@ return function(context)
 			updateMenu()
 		end)
 
+		styleSection(select(1, context.createStatusRow(parent, "VIEW + TARGET", "TOGGLE")), context.theme.focus)
 		for _, def in ipairs(featureDefs) do
-			local _, button = context.createKeybindRow(parent, string.upper(def.label), getKeybindText(def.id) or "NONE")
+			if def.id == "showTracers" then
+				styleSection(select(1, context.createStatusRow(parent, "VISUAL OVERLAYS", "TOGGLE")), context.theme.accent)
+			end
+			local bindRow, button = context.createKeybindRow(parent, string.upper(def.label), getKeybindText(def.id) or "NONE")
+			styleBindRow(bindRow, false)
 			state.rows[def.id] = button
 			button.MouseButton1Click:Connect(function()
 				state.listening = state.listening == def.id and nil or def.id
 				refreshRows()
 			end)
+			button.MouseButton2Click:Connect(function()
+				assignKeybind(def.id, "")
+				context.saveSettings()
+				refreshRows()
+				updateMenu()
+				if context.showToast then
+					context.showToast("Keybinds", string.format("%s cleared", def.label), context.theme.muted)
+				end
+			end)
 
-			local _, modeButton = context.createCycleRow(parent, string.upper(def.label .. " MODE"), string.upper(getMode(def.id)))
+			local modeRow, modeButton = context.createCycleRow(parent, string.upper(def.label .. " MODE"), string.upper(getMode(def.id)))
+			styleBindRow(modeRow, true)
 			state.modeButtons[def.id] = modeButton
 			modeButton.MouseButton1Click:Connect(function()
 				setMode(def.id, cycleMode(getMode(def.id)))
@@ -488,9 +576,12 @@ return function(context)
 				refreshRows()
 				updateMenu()
 			end)
+			pairIndex = pairIndex + 1
 		end
 
-		local _, resetButton = context.createCycleRow(parent, "RESET BINDS", "DEFAULTS")
+		styleSection(select(1, context.createStatusRow(parent, "RESET", "DEFAULTS")), context.theme.muted)
+		local resetRow, resetButton = context.createCycleRow(parent, "RESET BINDS", "DEFAULTS")
+		styleBindRow(resetRow, true)
 		resetButton.MouseButton1Click:Connect(resetDefaults)
 
 		refreshRows()
@@ -524,6 +615,10 @@ return function(context)
 		end
 
 		if isTyping() then
+			return false
+		end
+
+		if not context.config.keybindsEnabled then
 			return false
 		end
 
@@ -561,6 +656,11 @@ return function(context)
 		buildRows = buildRows,
 		handleInput = handleInput,
 		handleInputEnded = handleInputEnded,
+		resetPosition = function()
+			if context.resetOverlayPosition and state.menu then
+				context.resetOverlayPosition(state.menu, "keybindPanel")
+			end
+		end,
 		update = function()
 			refreshRows()
 			updateMenu()

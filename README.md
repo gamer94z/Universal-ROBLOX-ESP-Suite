@@ -2,7 +2,7 @@
 
 A proprietary Roblox ESP release by `0xVyrs`.
 
-**Version:** `v1.3.4`
+**Version:** `v1.3.5`
 
 ## Ownership
 
@@ -12,6 +12,22 @@ This project is proprietary and distributed under an `All Rights Reserved` model
 You may use it as released, but you may not modify it, resell it, repost it, or claim it as your own.
 
 ## Latest Patch
+
+- Added `MINIMAL MODE`, startup UI gating, and more reliable draggable overlay handling
+- Reworked `UTILITY > Utility` and `KEYBINDS` with clearer grouping, contrast, and better scanability
+- Expanded tooltip coverage across the UI and improved labels for less obvious options
+- Replaced the preset cycler with a dropdown selector that includes preset descriptions
+- Polished the in-app `UPDATE TRACK` card so its notes match the current release
+
+## Version History
+
+### `v1.3.5`
+
+- UI polish pass with better grouping, labels, contrast, and tooltip coverage
+- New preset dropdown with descriptions
+- Minimal mode and startup UI gating improvements
+
+### `v1.3.4`
 
 - Added a dedicated `KEYBINDS` section inside `CONTROL` for custom feature binds
 - Added `Toggle` and `Hold` bind modes with active keybinds shown under the watermark
@@ -64,4 +80,4 @@ You may use it as released, but you may not modify it, resell it, repost it, or 
 ## Authorized Loadstring
 
 ```lua
-loadstring(game:HttpGet("https://your-private-loader-endpoint/0xvyrs/esp.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp.lua"))()
