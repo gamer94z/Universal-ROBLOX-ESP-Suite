@@ -46,6 +46,17 @@ local CONFIG = {
 	fovRadius = 60,
 	fovCircleThickness = 2,
 	fovCircleTransparency = 90,
+	aimTrainerMode = false,
+	trainerDrillType = "Click",
+	trainerReactionTimer = true,
+	trainerHitWindow = 18,
+	trainerChallengeMode = false,
+	trainerChallengeDuration = 30,
+	trainerShrinkingTargets = false,
+	trainerTrackHoldTime = 2,
+	trainerTargetSpeed = 110,
+	recoilVisualizer = false,
+	spreadVisualizer = false,
 	cameraFov = 70,
 	freeCamSpeed = 72,
 	removeZoomLimit = false,
@@ -82,7 +93,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.3.5",
+	version = "1.3.6",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	miniHudOffsetX = -1,
@@ -293,6 +304,8 @@ local uiReady = false
 local syncUiFromConfig
 local getCharacterRoot
 local applyConfigToggleState
+local loadedTrainerRecords
+local loadedTrainerCustomPresets
 local keybindController
 local overlayTools
 local keybindState = {
@@ -964,7 +977,7 @@ end
 local OVERLAY_TOOLS_MODULE_SOURCE = [==[
 return function(context)
 	local releaseTrack = {
-		latestVersion = "1.3.5",
+		latestVersion = "1.3.6",
 		title = "UI Polish + Preset Pass",
 		notes = {
 			"Added minimal mode for a cleaner stripped-down presentation.",
@@ -1293,10 +1306,18 @@ local function loadSettings()
 	local configSource = decoded
 	local keybindSource = decoded.featureKeybinds
 	local bindModeSource = decoded.featureKeybindModes
+	loadedTrainerRecords = type(decoded.trainerPersonalBests) == "table" and decoded.trainerPersonalBests or nil
+	loadedTrainerCustomPresets = type(decoded.trainerCustomPresets) == "table" and decoded.trainerCustomPresets or nil
 	if decoded.placeConfigs and decoded.placeConfigs[tostring(game.PlaceId)] and decoded.placeConfigs[tostring(game.PlaceId)].settings and decoded.autoLoadGamePreset ~= false then
 		configSource = decoded.placeConfigs[tostring(game.PlaceId)].settings
 		keybindSource = decoded.placeConfigs[tostring(game.PlaceId)].featureKeybinds or keybindSource
 		bindModeSource = decoded.placeConfigs[tostring(game.PlaceId)].featureKeybindModes or bindModeSource
+		if type(decoded.placeConfigs[tostring(game.PlaceId)].trainerPersonalBests) == "table" then
+			loadedTrainerRecords = decoded.placeConfigs[tostring(game.PlaceId)].trainerPersonalBests
+		end
+		if type(decoded.placeConfigs[tostring(game.PlaceId)].trainerCustomPresets) == "table" then
+			loadedTrainerCustomPresets = decoded.placeConfigs[tostring(game.PlaceId)].trainerCustomPresets
+		end
 	end
 
 	for _, key in ipairs(SETTING_KEYS) do
@@ -1370,6 +1391,15 @@ local function saveSettings()
 	for featureId, modeText in pairs(FEATURE_KEYBIND_MODES) do
 		payload.featureKeybindModes[featureId] = modeText
 	end
+	if miniHudLabels and miniHudLabels.utility and miniHudLabels.utility.trainer then
+		payload.trainerPersonalBests = {
+			clickBestMs = miniHudLabels.utility.trainer.clickBestMs,
+			clickBestStreak = miniHudLabels.utility.trainer.clickBestStreak,
+			trackBestMs = miniHudLabels.utility.trainer.trackBestMs,
+			trackBestStreak = miniHudLabels.utility.trainer.trackBestStreak,
+		}
+	end
+	payload.trainerCustomPresets = TRAINER_CUSTOM_PRESETS
 
 	payload.placeConfigs = payload.placeConfigs or {}
 	payload.placeConfigs[tostring(game.PlaceId)] = {
@@ -1392,6 +1422,15 @@ local function saveSettings()
 	for featureId, modeText in pairs(FEATURE_KEYBIND_MODES) do
 		payload.placeConfigs[tostring(game.PlaceId)].featureKeybindModes[featureId] = modeText
 	end
+	if miniHudLabels and miniHudLabels.utility and miniHudLabels.utility.trainer then
+		payload.placeConfigs[tostring(game.PlaceId)].trainerPersonalBests = {
+			clickBestMs = miniHudLabels.utility.trainer.clickBestMs,
+			clickBestStreak = miniHudLabels.utility.trainer.clickBestStreak,
+			trackBestMs = miniHudLabels.utility.trainer.trackBestMs,
+			trackBestStreak = miniHudLabels.utility.trainer.trackBestStreak,
+		}
+	end
+	payload.placeConfigs[tostring(game.PlaceId)].trainerCustomPresets = TRAINER_CUSTOM_PRESETS
 
 	pcall(function()
 		writefile(SETTINGS_FILE, HttpService:JSONEncode(payload))
@@ -1919,9 +1958,9 @@ local minimalWindowSize = UDim2.new(0, 392, 0, 486)
 local minimalMinimizedWindowSize = UDim2.new(0, 392, 0, 82)
 local uiMinimized = false
 local updateInterval = 1 / 30
-local currentFps = 0
-local trackedEnemyCount = 0
-local lastRefreshMs = 0
+currentFps = 0
+trackedEnemyCount = 0
+lastRefreshMs = 0
 
 PRESETS = {
 	{
@@ -2028,6 +2067,95 @@ local CROSSHAIR_COLOR_OPTIONS = {
 	{ name = "Pink", color = Color3.fromRGB(255, 2, 127) },
 }
 local CROSSHAIR_SIZE_OPTIONS = { 5, 7, 9, 11, 13 }
+TRAINER_PRESET_DEFS = {
+	{
+		name = "Warmup",
+		description = "Balanced click drill with forgiving hit window and a short timed session.",
+		apply = function()
+			CONFIG.aimTrainerMode = true
+			CONFIG.trainerDrillType = "Click"
+			CONFIG.trainerReactionTimer = true
+			CONFIG.trainerHitWindow = 22
+			CONFIG.trainerChallengeMode = true
+			CONFIG.trainerChallengeDuration = 30
+			CONFIG.trainerShrinkingTargets = false
+			CONFIG.trainerTrackHoldTime = 2
+			CONFIG.trainerTargetSpeed = 110
+		end,
+	},
+	{
+		name = "Precision",
+		description = "Small click window with shrinking targets for tighter accuracy practice.",
+		apply = function()
+			CONFIG.aimTrainerMode = true
+			CONFIG.trainerDrillType = "Click"
+			CONFIG.trainerReactionTimer = true
+			CONFIG.trainerHitWindow = 12
+			CONFIG.trainerChallengeMode = true
+			CONFIG.trainerChallengeDuration = 45
+			CONFIG.trainerShrinkingTargets = true
+			CONFIG.trainerTrackHoldTime = 2
+			CONFIG.trainerTargetSpeed = 125
+		end,
+	},
+	{
+		name = "Tracking",
+		description = "Moving target drill with longer hold time and faster travel speed.",
+		apply = function()
+			CONFIG.aimTrainerMode = true
+			CONFIG.trainerDrillType = "Track"
+			CONFIG.trainerReactionTimer = true
+			CONFIG.trainerHitWindow = 16
+			CONFIG.trainerChallengeMode = true
+			CONFIG.trainerChallengeDuration = 45
+			CONFIG.trainerShrinkingTargets = false
+			CONFIG.trainerTrackHoldTime = 3
+			CONFIG.trainerTargetSpeed = 150
+		end,
+	},
+	{
+		name = "Speed",
+		description = "Fast click drill for rapid target swaps with a shorter timer and larger pace demand.",
+		apply = function()
+			CONFIG.aimTrainerMode = true
+			CONFIG.trainerDrillType = "Click"
+			CONFIG.trainerReactionTimer = true
+			CONFIG.trainerHitWindow = 16
+			CONFIG.trainerChallengeMode = true
+			CONFIG.trainerChallengeDuration = 20
+			CONFIG.trainerShrinkingTargets = false
+			CONFIG.trainerTrackHoldTime = 2
+			CONFIG.trainerTargetSpeed = 170
+		end,
+	},
+	{
+		name = "Micro Adjust",
+		description = "Tiny click targets with shrinking enabled to train fine cursor correction and stop control.",
+		apply = function()
+			CONFIG.aimTrainerMode = true
+			CONFIG.trainerDrillType = "Click"
+			CONFIG.trainerReactionTimer = true
+			CONFIG.trainerHitWindow = 9
+			CONFIG.trainerChallengeMode = true
+			CONFIG.trainerChallengeDuration = 35
+			CONFIG.trainerShrinkingTargets = true
+			CONFIG.trainerTrackHoldTime = 2
+			CONFIG.trainerTargetSpeed = 105
+		end,
+	},
+}
+TRAINER_CUSTOM_PRESETS = {
+	["Custom 1"] = {
+		label = "Custom 1",
+		badge = "USER 1",
+		settings = nil,
+	},
+	["Custom 2"] = {
+		label = "Custom 2",
+		badge = "USER 2",
+		settings = nil,
+	},
+}
 local SKELETON_CONNECTIONS = {
 	{ "Head", "UpperTorso" },
 	{ "UpperTorso", "LowerTorso" },
@@ -2079,6 +2207,17 @@ SETTING_KEYS = {
 	"fovRadius",
 	"fovCircleThickness",
 	"fovCircleTransparency",
+	"aimTrainerMode",
+	"trainerDrillType",
+	"trainerReactionTimer",
+	"trainerHitWindow",
+	"trainerChallengeMode",
+	"trainerChallengeDuration",
+	"trainerShrinkingTargets",
+	"trainerTrackHoldTime",
+	"trainerTargetSpeed",
+	"recoilVisualizer",
+	"spreadVisualizer",
 	"cameraFov",
 	"freeCamSpeed",
 	"removeZoomLimit",
@@ -2122,6 +2261,8 @@ loadSettings()
 CONFIG.enabled = true
 CONFIG.showSkeleton = false
 CONFIG.boxMode = "Highlight"
+CONFIG.aimTrainerMode = false
+CONFIG.trainerChallengeMode = false
 
 create("UIGradient", {
 	Color = ColorSequence.new({
@@ -2429,6 +2570,151 @@ local function createPerfRow(parent)
 	return row, stats
 end
 
+function createTrainerCardsRow(parent)
+	local row = createRow(parent, 108)
+	row.BackgroundColor3 = THEME.panelAlt
+
+	local holder = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(1, -18, 1, -12),
+		Parent = row,
+	})
+
+	create("UIGridLayout", {
+		CellPadding = UDim2.new(0, 8, 0, 0),
+		CellSize = UDim2.new(0.5, -4, 1, 0),
+		FillDirectionMaxCells = 2,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = holder,
+	})
+
+	local function createCard(titleText, accentColor)
+		local card = create("Frame", {
+			BackgroundColor3 = Color3.fromRGB(22, 27, 37),
+			BorderSizePixel = 0,
+			Parent = holder,
+		})
+		addCorner(card, 8)
+		addStroke(card, accentColor, 0.72, 1)
+
+		local title = makeLabel(card, titleText, 10, THEME.text, Enum.Font.GothamBold)
+		title.Position = UDim2.new(0, 10, 0, 8)
+		title.Size = UDim2.new(0, 66, 0, 12)
+
+		local badge = create("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -8, 0, 8),
+			Size = UDim2.new(0, 44, 0, 14),
+			Font = Enum.Font.GothamBold,
+			Text = "IDLE",
+			TextColor3 = THEME.muted,
+			TextSize = 7,
+			Parent = card,
+		})
+		addCorner(badge, 999)
+
+		local lines = {}
+		for index = 1, 4 do
+			local line = makeLabel(card, "--", 9, THEME.muted, Enum.Font.GothamMedium)
+			line.Position = UDim2.new(0, 10, 0, 28 + ((index - 1) * 16))
+			line.Size = UDim2.new(1, -20, 0, 14)
+			lines[index] = line
+		end
+
+		return {
+			frame = card,
+			badge = badge,
+			lines = lines,
+			accent = accentColor,
+		}
+	end
+
+	return row, {
+		click = createCard("CLICK", THEME.accent),
+		track = createCard("TRACK", THEME.focus),
+	}
+end
+
+function createTrainerResultsRow(parent)
+	local row = createRow(parent, 98)
+	row.BackgroundColor3 = THEME.panelAlt
+	row.Visible = false
+
+	local title = makeLabel(row, "LAST CHALLENGE", 10, THEME.text, Enum.Font.GothamBold)
+	title.Position = UDim2.new(0, 10, 0, 8)
+	title.Size = UDim2.new(0, 110, 0, 12)
+
+	local badge = create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -10, 0, 8),
+		Size = UDim2.new(0, 62, 0, 16),
+		Font = Enum.Font.GothamBold,
+		Text = "EMPTY",
+		TextColor3 = THEME.muted,
+		TextSize = 8,
+		Parent = row,
+	})
+	addCorner(badge, 999)
+
+	local lines = {}
+	for index = 1, 4 do
+		local line = makeLabel(row, "--", 9, THEME.muted, Enum.Font.GothamMedium)
+		line.Position = UDim2.new(0, 10, 0, 30 + ((index - 1) * 14))
+		line.Size = UDim2.new(1, -20, 0, 12)
+		lines[index] = line
+	end
+
+	return row, {
+		badge = badge,
+		lines = lines,
+	}
+end
+
+function createTrainerHistoryRow(parent)
+	local row = createRow(parent, 92)
+	row.BackgroundColor3 = THEME.panelAlt
+	row.Visible = false
+
+	local title = makeLabel(row, "SESSION HISTORY", 10, THEME.text, Enum.Font.GothamBold)
+	title.Position = UDim2.new(0, 10, 0, 8)
+	title.Size = UDim2.new(0, 110, 0, 12)
+
+	local badge = create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -10, 0, 8),
+		Size = UDim2.new(0, 54, 0, 16),
+		Font = Enum.Font.GothamBold,
+		Text = "0 RUNS",
+		TextColor3 = THEME.muted,
+		TextSize = 8,
+		Parent = row,
+	})
+	addCorner(badge, 999)
+
+	local lines = {}
+	for index = 1, 4 do
+		local line = makeLabel(row, "--", 9, THEME.muted, Enum.Font.GothamMedium)
+		line.Position = UDim2.new(0, 10, 0, 30 + ((index - 1) * 14))
+		line.Size = UDim2.new(1, -20, 0, 12)
+		lines[index] = line
+	end
+
+	return row, {
+		badge = badge,
+		lines = lines,
+	}
+end
+
 local function createCycleRow(parent, labelText, valueText)
 	local row = createRow(parent, 30)
 	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
@@ -2658,8 +2944,21 @@ end
 local function setOptionButtonsState(buttonEntries, selectedValue)
 	for _, entry in ipairs(buttonEntries) do
 		local selected = entry.value == selectedValue
-		entry.button.BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
-		entry.button.TextColor3 = selected and THEME.text or THEME.muted
+		local backgroundColor = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
+		local textColor = selected and THEME.text or THEME.muted
+		local strokeTransparency = selected and 0.15 or 0.65
+
+		if entry.button:GetAttribute("TrainerPresetButton") then
+			local presetColor = entry.button:GetAttribute("PresetColor")
+			if typeof(presetColor) == "Color3" then
+				backgroundColor = selected and presetColor:Lerp(Color3.fromRGB(255, 255, 255), 0.22) or presetColor:Lerp(Color3.fromRGB(20, 24, 33), 0.7)
+				textColor = selected and THEME.text or presetColor
+				strokeTransparency = selected and 0.08 or 0.45
+			end
+		end
+
+		entry.button.BackgroundColor3 = backgroundColor
+		entry.button.TextColor3 = textColor
 
 		if type(entry.value) == "string" then
 			for _, colorOption in ipairs(CROSSHAIR_COLOR_OPTIONS) do
@@ -2672,7 +2971,7 @@ local function setOptionButtonsState(buttonEntries, selectedValue)
 
 		local stroke = entry.button:FindFirstChildOfClass("UIStroke")
 		if stroke then
-			stroke.Transparency = selected and 0.15 or 0.65
+			stroke.Transparency = strokeTransparency
 		end
 	end
 end
@@ -3057,7 +3356,7 @@ do
 end
 createNoteRow(pages.display, "Nameplates, boxes, cards, and how world info is presented.")
 
-local tracerSliders = {}
+tracerSliders = {}
 
 do
 	local headerRow, headerValue = createStatusRow(pages.combat, "COMBAT", "ACTIVE")
@@ -3089,12 +3388,13 @@ do
 		{ key = "targeting", label = "TARGET" },
 		{ key = "tracers", label = "TRACERS" },
 		{ key = "crosshair", label = "CROSSHAIR" },
+		{ key = "trainer", label = "TRAIN" },
 	}) do
 		tracerSliders.tabs[item.key] = create("TextButton", {
 			AutoButtonColor = false,
 			BackgroundColor3 = item.key == "targeting" and THEME.accentSoft or Color3.fromRGB(35, 40, 53),
 			BorderSizePixel = 0,
-			Size = UDim2.new(0, item.key == "crosshair" and 86 or 74, 1, 0),
+			Size = UDim2.new(0, item.key == "crosshair" and 86 or (item.key == "trainer" and 72 or 74), 1, 0),
 			Font = Enum.Font.GothamBold,
 			Text = item.label,
 			TextColor3 = item.key == "targeting" and THEME.text or THEME.muted,
@@ -3119,7 +3419,7 @@ do
 		Parent = body,
 	})
 
-	for _, item in ipairs({ "targeting", "tracers", "crosshair" }) do
+	for _, item in ipairs({ "targeting", "tracers", "crosshair", "trainer" }) do
 		tracerSliders.tabs[item .. "Page"] = create("Frame", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
@@ -3137,7 +3437,7 @@ do
 	end
 
 	tracerSliders.setCombatTab = function(tabName)
-		for _, item in ipairs({ "targeting", "tracers", "crosshair" }) do
+		for _, item in ipairs({ "targeting", "tracers", "crosshair", "trainer" }) do
 			local selected = item == tabName
 			tracerSliders.tabs[item].BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
 			tracerSliders.tabs[item].TextColor3 = selected and THEME.text or THEME.muted
@@ -3159,6 +3459,10 @@ do
 
 	tracerSliders.tabs.crosshair.MouseButton1Click:Connect(function()
 		tracerSliders.setCombatTab("crosshair")
+	end)
+
+	tracerSliders.tabs.trainer.MouseButton1Click:Connect(function()
+		tracerSliders.setCombatTab("trainer")
 	end)
 end
 
@@ -3571,6 +3875,86 @@ tracerSliders.crosshairThickness = createSliderRow(pages.combat, "CROSSHAIR THIC
 tracerSliders.crosshairSizeSlider = createSliderRow(pages.combat, "CROSSHAIR SIZE", CONFIG.crosshairSize, CROSSHAIR_SIZE_OPTIONS[1], CROSSHAIR_SIZE_OPTIONS[#CROSSHAIR_SIZE_OPTIONS])
 tracerSliders.crosshairGap = createSliderRow(pages.combat, "CROSSHAIR GAP", CONFIG.crosshairGap, 0, 10)
 tracerSliders.fovCircleToggle = select(2, createToggleRow(pages.combat, "FOV CIRCLE VISIBLE", CONFIG.showFovCircle))
+tracerSliders.trainingStatus = select(2, createStatusRow(pages.combat, "AIM TRAINER", "OFF"))
+tracerSliders.trainingCardsRow, tracerSliders.trainingCards = createTrainerCardsRow(pages.combat)
+tracerSliders.trainingResultsRow, tracerSliders.trainingResults = createTrainerResultsRow(pages.combat)
+tracerSliders.trainingHistoryRow, tracerSliders.trainingHistory = createTrainerHistoryRow(pages.combat)
+tracerSliders.trainingToggle = select(2, createToggleRow(pages.combat, "TRAINER MODE", CONFIG.aimTrainerMode))
+tracerSliders.trainingPresetButtons = select(2, createOptionButtonsRow(pages.combat, "TRAIN PRESET", { "Warmup", "Precision", "Tracking", "Speed", "Micro Adjust", "Custom 1", "Custom 2" }, "Warmup"))
+tracerSliders.trainingSaveButtons = select(2, createOptionButtonsRow(pages.combat, "SAVE CUSTOM", { "Custom 1", "Custom 2" }, nil))
+do
+	local row = createRow(pages.combat, 52)
+	local label = makeLabel(row, "CUSTOM SLOT", 10, THEME.muted, Enum.Font.GothamMedium)
+	label.Position = UDim2.new(0, 10, 0, 6)
+	label.Size = UDim2.new(0, 92, 0, 12)
+
+	tracerSliders.trainingRenameInput = create("TextBox", {
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.GothamMedium,
+		PlaceholderColor3 = THEME.muted,
+		PlaceholderText = "Name",
+		Position = UDim2.new(0, 10, 0, 24),
+		Size = UDim2.new(0, 114, 0, 20),
+		Text = "",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(tracerSliders.trainingRenameInput, 4)
+	addStroke(tracerSliders.trainingRenameInput, THEME.border, 0.35, 1)
+
+	tracerSliders.trainingBadgeInput = create("TextBox", {
+		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = Enum.Font.GothamMedium,
+		PlaceholderColor3 = THEME.muted,
+		PlaceholderText = "Badge",
+		Position = UDim2.new(0, 130, 0, 24),
+		Size = UDim2.new(0, 68, 0, 20),
+		Text = "",
+		TextColor3 = THEME.text,
+		TextSize = 9,
+		Parent = row,
+	})
+	addCorner(tracerSliders.trainingBadgeInput, 4)
+	addStroke(tracerSliders.trainingBadgeInput, THEME.border, 0.35, 1)
+
+	tracerSliders.trainingRenameButtons = {}
+	for index, slotName in ipairs({ "Custom 1", "Custom 2" }) do
+		local button = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -(10 + ((2 - index) * 52)), 0.5, 8),
+			Size = UDim2.new(0, 48, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = index == 1 and "SLOT 1" or "SLOT 2",
+			TextColor3 = slotName == "Custom 1" and Color3.fromRGB(162, 129, 255) or Color3.fromRGB(255, 154, 76),
+			TextSize = 8,
+			Parent = row,
+		})
+		addCorner(button, 4)
+		addStroke(button, THEME.border, 0.35, 1)
+		tracerSliders.trainingRenameButtons[slotName] = button
+	end
+
+	tracerSliders.trainingRenameRow = row
+end
+tracerSliders.trainingDrillType = select(2, createCycleRow(pages.combat, "DRILL TYPE", CONFIG.trainerDrillType))
+tracerSliders.trainingReactionToggle = select(2, createToggleRow(pages.combat, "REACTION TIMER", CONFIG.trainerReactionTimer))
+tracerSliders.trainingHitWindow = createSliderRow(pages.combat, "HIT WINDOW", CONFIG.trainerHitWindow, 8, 40)
+tracerSliders.trainingChallengeToggle = select(2, createToggleRow(pages.combat, "TIMED CHALLENGE", CONFIG.trainerChallengeMode))
+tracerSliders.trainingChallengeDuration = createSliderRow(pages.combat, "CHALLENGE LENGTH", CONFIG.trainerChallengeDuration, 15, 90)
+tracerSliders.trainingShrinkingToggle = select(2, createToggleRow(pages.combat, "SHRINKING TARGETS", CONFIG.trainerShrinkingTargets))
+tracerSliders.trainingTrackHoldTime = createSliderRow(pages.combat, "TRACK HOLD", CONFIG.trainerTrackHoldTime, 1, 5)
+tracerSliders.trainingTargetSpeed = createSliderRow(pages.combat, "TARGET SPEED", CONFIG.trainerTargetSpeed, 40, 220)
+tracerSliders.trainingReset = select(2, createCycleRow(pages.combat, "RESET DRILL", "NOW"))
+tracerSliders.recoilVisualizerToggle = select(2, createToggleRow(pages.combat, "RECOIL VISUALIZER", CONFIG.recoilVisualizer))
+tracerSliders.spreadVisualizerToggle = select(2, createToggleRow(pages.combat, "SPREAD VISUALIZER", CONFIG.spreadVisualizer))
 
 do
 	tracerSliders.focusLock.Parent.Parent = tracerSliders.tabs.targetingPage
@@ -3596,6 +3980,25 @@ do
 	tracerSliders.crosshairThickness.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.crosshairSizeSlider.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
 	tracerSliders.crosshairGap.bar.Parent.Parent = tracerSliders.tabs.crosshairPage
+	tracerSliders.trainingStatus.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingCardsRow.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingResultsRow.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingHistoryRow.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingToggle.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingPresetButtons[1].button.Parent.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingSaveButtons[1].button.Parent.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingRenameRow.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingDrillType.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingReactionToggle.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingHitWindow.bar.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingChallengeToggle.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingChallengeDuration.bar.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingShrinkingToggle.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingTrackHoldTime.bar.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingTargetSpeed.bar.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.trainingReset.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.recoilVisualizerToggle.Parent.Parent = tracerSliders.tabs.trainerPage
+	tracerSliders.spreadVisualizerToggle.Parent.Parent = tracerSliders.tabs.trainerPage
 	tracerSliders.setCombatTab("targeting")
 end
 
@@ -3658,8 +4061,28 @@ miniHudLabels.bindTooltip(tracerSliders.crosshairStyleButton, "Changes the cross
 miniHudLabels.bindTooltip(crosshairColorButtons[1].button.Parent.Parent, "Selects the color used for the custom crosshair and FOV circle.")
 miniHudLabels.bindTooltip(tracerSliders.crosshairSizeSlider.bar, "Adjusts the overall size of the custom crosshair.")
 miniHudLabels.bindTooltip(tracerSliders.fovCircleToggle, "Shows or hides the FOV circle independently of the crosshair.")
+miniHudLabels.bindTooltip(tracerSliders.trainingStatus, "Shows live trainer timing and hit stats while practice mode is active.")
+miniHudLabels.bindTooltip(tracerSliders.trainingCards.click.frame, "Click drill card tracks acquisition speed, accuracy, misses, and click streaks.")
+miniHudLabels.bindTooltip(tracerSliders.trainingCards.track.frame, "Track drill card tracks hover completions, hold stability, break rate, and tracking streaks.")
+miniHudLabels.bindTooltip(tracerSliders.trainingResultsRow, "Shows the latest timed challenge result with a short breakdown of your run.")
+miniHudLabels.bindTooltip(tracerSliders.trainingHistoryRow, "Keeps a short session-only history of your most recent timed challenge runs.")
+miniHudLabels.bindTooltip(tracerSliders.trainingPresetButtons[1].button.Parent.Parent, "One-click drill setups for warmup, precision practice, and dedicated tracking.")
+miniHudLabels.bindTooltip(tracerSliders.trainingSaveButtons[1].button.Parent.Parent, "Saves your current trainer settings into one of the custom slots.")
+miniHudLabels.bindTooltip(tracerSliders.trainingRenameRow, "Set a custom slot name and badge, then assign them to Custom 1 or Custom 2.")
+miniHudLabels.bindTooltip(tracerSliders.trainingToggle, "Enables visual-only aim training drills inside the crosshair page.")
+miniHudLabels.bindTooltip(tracerSliders.trainingDrillType, "Click mode is for target acquisition. Track mode is for holding your cursor over a moving target.")
+miniHudLabels.bindTooltip(tracerSliders.trainingReactionToggle, "Measures your time from target spawn to successful click.")
+miniHudLabels.bindTooltip(tracerSliders.trainingHitWindow.bar, "Controls how close your click must be to count as a hit.")
+miniHudLabels.bindTooltip(tracerSliders.trainingChallengeToggle, "Starts a timed drill using the selected challenge length.")
+miniHudLabels.bindTooltip(tracerSliders.trainingChallengeDuration.bar, "Sets how long each timed challenge lasts.")
+miniHudLabels.bindTooltip(tracerSliders.trainingShrinkingToggle, "Makes targets get smaller as your hit count increases.")
+miniHudLabels.bindTooltip(tracerSliders.trainingTrackHoldTime.bar, "In Track mode, this is how long you must keep your cursor over the target to score.")
+miniHudLabels.bindTooltip(tracerSliders.trainingTargetSpeed.bar, "Controls how fast the training target moves around the screen.")
+miniHudLabels.bindTooltip(tracerSliders.trainingReset, "Clears aim trainer stats and respawns a fresh target.")
+miniHudLabels.bindTooltip(tracerSliders.recoilVisualizerToggle, "Shows a temporary recoil kick marker after each click.")
+miniHudLabels.bindTooltip(tracerSliders.spreadVisualizerToggle, "Shows an expanding spread ring that blooms on click and decays.")
 
-local viewButtons = {
+viewButtons = {
 	status = select(2, createStatusRow(pages.player, "STATUS", "LOCAL")),
 	spectate = createSpectateRow(pages.player),
 	nav = {},
@@ -3669,7 +4092,7 @@ local viewButtons = {
 	reset = select(2, createCycleRow(pages.player, "RESET VIEW", "DEFAULT")),
 }
 
-local playerButtons = {
+playerButtons = {
 	tabs = {},
 	status = nil,
 	walkSpeedToggle = nil,
@@ -3878,6 +4301,59 @@ local performanceCache = {
 }
 local crosshairObjects = {}
 local fovCircleObject
+miniHudLabels.utility.trainer = miniHudLabels.utility.trainer or {
+	targetPosition = nil,
+	targetSpawnAt = 0,
+	lastReactionMs = nil,
+	bestReactionMs = nil,
+	hits = 0,
+	misses = 0,
+	clickHits = 0,
+	clickMisses = 0,
+	clickTotalMs = 0,
+	clickBestMs = nil,
+	clickStreak = 0,
+	clickBestStreak = 0,
+	trackHits = 0,
+	trackBreaks = 0,
+	trackTotalMs = 0,
+	trackBestMs = nil,
+	trackStreak = 0,
+	trackBestStreak = 0,
+	challengeEndsAt = nil,
+	lastResults = nil,
+	history = {},
+	holdProgress = 0,
+	targetVelocity = Vector2.new(110, 76),
+	spreadValue = 0,
+	recoilKick = 0,
+	recoilOffset = Vector2.zero,
+}
+if type(loadedTrainerRecords) == "table" then
+	miniHudLabels.utility.trainer.clickBestMs = loadedTrainerRecords.clickBestMs
+	miniHudLabels.utility.trainer.clickBestStreak = loadedTrainerRecords.clickBestStreak or 0
+	miniHudLabels.utility.trainer.trackBestMs = loadedTrainerRecords.trackBestMs
+	miniHudLabels.utility.trainer.trackBestStreak = loadedTrainerRecords.trackBestStreak or 0
+end
+if type(loadedTrainerCustomPresets) == "table" then
+	for slotName in pairs(TRAINER_CUSTOM_PRESETS) do
+		if type(loadedTrainerCustomPresets[slotName]) == "table" then
+			if loadedTrainerCustomPresets[slotName].settings ~= nil or loadedTrainerCustomPresets[slotName].label ~= nil then
+				TRAINER_CUSTOM_PRESETS[slotName] = {
+					label = loadedTrainerCustomPresets[slotName].label or slotName,
+					badge = loadedTrainerCustomPresets[slotName].badge or (slotName == "Custom 1" and "USER 1" or "USER 2"),
+					settings = loadedTrainerCustomPresets[slotName].settings,
+				}
+			else
+				TRAINER_CUSTOM_PRESETS[slotName] = {
+					label = slotName,
+					badge = slotName == "Custom 1" and "USER 1" or "USER 2",
+					settings = loadedTrainerCustomPresets[slotName],
+				}
+			end
+		end
+	end
+end
 local viewState = {
 	spectateTarget = nil,
 	freeCamEnabled = false,
@@ -3893,6 +4369,7 @@ local viewState = {
 	flyVelocity = nil,
 	flyLookVector = nil,
 	defaultWalkSpeed = nil,
+	walkSpeedChangedConnection = nil,
 	defaultMinZoomDistance = nil,
 	defaultMaxZoomDistance = nil,
 	lockedFocusTarget = nil,
@@ -4162,8 +4639,6 @@ local function applyPlayerMovementState()
 		if humanoid.WalkSpeed ~= CONFIG.walkSpeed then
 			humanoid.WalkSpeed = CONFIG.walkSpeed
 		end
-	elseif viewState.defaultWalkSpeed and humanoid.WalkSpeed ~= viewState.defaultWalkSpeed then
-		humanoid.WalkSpeed = viewState.defaultWalkSpeed
 	end
 
 	if not CONFIG.fly and humanoid.AutoRotate == false then
@@ -4225,6 +4700,25 @@ end
 local function resetDefaultMovementCache()
 	local humanoid = getLocalHumanoid()
 	viewState.defaultWalkSpeed = humanoid and humanoid.WalkSpeed or nil
+end
+
+local function bindLocalMovementSignals(humanoid)
+	if viewState.walkSpeedChangedConnection then
+		viewState.walkSpeedChangedConnection:Disconnect()
+		viewState.walkSpeedChangedConnection = nil
+	end
+
+	if not humanoid then
+		viewState.defaultWalkSpeed = nil
+		return
+	end
+
+	viewState.defaultWalkSpeed = humanoid.WalkSpeed
+	viewState.walkSpeedChangedConnection = humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+		if not CONFIG.walkSpeedEnabled and not viewState.freeCamEnabled and not viewState.humanoidState then
+			viewState.defaultWalkSpeed = humanoid.WalkSpeed
+		end
+	end)
 end
 
 
@@ -5669,6 +6163,135 @@ local function updatePerfStatsUi()
 		end
 	end
 
+	if tracerSliders.trainingStatus then
+		local trainer = miniHudLabels.utility.trainer
+		local activeTrainerPreset = getActiveTrainerPresetName()
+		local trainerAccent = activeTrainerPreset and getTrainerPresetColor(activeTrainerPreset) or (CONFIG.trainerDrillType == "Track" and THEME.focus or THEME.accent)
+		local clickShots = math.max(1, (trainer.clickHits or 0) + (trainer.clickMisses or 0))
+		local clickAverage = (trainer.clickHits or 0) > 0 and math.floor((trainer.clickTotalMs or 0) / math.max(trainer.clickHits, 1) + 0.5) or nil
+		local trackAverage = (trainer.trackHits or 0) > 0 and math.floor((trainer.trackTotalMs or 0) / math.max(trainer.trackHits, 1) + 0.5) or nil
+		if CONFIG.aimTrainerMode then
+			local parts = {}
+			local totalShots = math.max(1, (trainer.hits or 0) + (trainer.misses or 0))
+			if CONFIG.trainerReactionTimer and trainer.lastReactionMs then
+				table.insert(parts, string.format("%dMS", trainer.lastReactionMs))
+			end
+			table.insert(parts, CONFIG.trainerDrillType == "Track" and "TRACK" or "CLICK")
+			table.insert(parts, string.format("H %d", trainer.hits or 0))
+			if CONFIG.trainerDrillType == "Click" then
+				table.insert(parts, string.format("M %d", trainer.misses or 0))
+				table.insert(parts, string.format("ACC %d%%", math.floor(((trainer.hits or 0) / totalShots) * 100 + 0.5)))
+			else
+				table.insert(parts, string.format("HOLD %d%%", math.floor((math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress or 0) / math.max(CONFIG.trainerTrackHoldTime, 1)) * 100 + 0.5)))
+			end
+			if trainer.bestReactionMs then
+				table.insert(parts, string.format("BEST %d", trainer.bestReactionMs))
+			end
+			if not activeTrainerPreset then
+				table.insert(parts, "CUSTOM")
+			end
+			if CONFIG.trainerChallengeMode and trainer.challengeEndsAt then
+				table.insert(parts, string.format("T %d", math.max(0, math.ceil(trainer.challengeEndsAt - tick()))))
+			end
+			tracerSliders.trainingStatus.Text = table.concat(parts, " | ")
+			tracerSliders.trainingStatus.TextColor3 = THEME.focus
+		else
+			tracerSliders.trainingStatus.Text = "OFF"
+			tracerSliders.trainingStatus.TextColor3 = THEME.text
+		end
+
+		if tracerSliders.trainingCards then
+			local clickCard = tracerSliders.trainingCards.click
+			local trackCard = tracerSliders.trainingCards.track
+			local clickActive = CONFIG.trainerDrillType == "Click"
+			local trackActive = CONFIG.trainerDrillType == "Track"
+			local clickStroke = clickCard.frame:FindFirstChildOfClass("UIStroke")
+			local trackStroke = trackCard.frame:FindFirstChildOfClass("UIStroke")
+
+			clickCard.badge.Text = CONFIG.aimTrainerMode and (clickActive and "LIVE" or "READY") or "IDLE"
+			clickCard.badge.BackgroundColor3 = clickActive and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
+			clickCard.badge.TextColor3 = clickActive and THEME.text or THEME.muted
+			clickCard.lines[1].Text = string.format("Hits %d | Misses %d", trainer.clickHits or 0, trainer.clickMisses or 0)
+			clickCard.lines[2].Text = string.format("Accuracy %d%% | Avg %s", math.floor(((trainer.clickHits or 0) / clickShots) * 100 + 0.5), clickAverage and (tostring(clickAverage) .. "ms") or "--")
+			clickCard.lines[3].Text = string.format("Best %s | Last %s", trainer.clickBestMs and (tostring(trainer.clickBestMs) .. "ms") or "--", trainer.lastReactionMs and clickActive and (tostring(trainer.lastReactionMs) .. "ms") or "--")
+			clickCard.lines[4].Text = string.format("Streak %d | Peak %d", trainer.clickStreak or 0, trainer.clickBestStreak or 0)
+			clickCard.frame.BackgroundColor3 = clickActive and Color3.fromRGB(25, 32, 44) or Color3.fromRGB(22, 27, 37)
+			if clickStroke then
+				clickStroke.Transparency = clickActive and 0.18 or 0.72
+			end
+
+			trackCard.badge.Text = CONFIG.aimTrainerMode and (trackActive and "LIVE" or "READY") or "IDLE"
+			trackCard.badge.BackgroundColor3 = trackActive and Color3.fromRGB(86, 71, 28) or Color3.fromRGB(35, 40, 53)
+			trackCard.badge.TextColor3 = trackActive and THEME.text or THEME.muted
+			trackCard.lines[1].Text = string.format("Tracks %d | Breaks %d", trainer.trackHits or 0, trainer.trackBreaks or 0)
+			trackCard.lines[2].Text = string.format("Avg %s | Best %s", trackAverage and (tostring(trackAverage) .. "ms") or "--", trainer.trackBestMs and (tostring(trainer.trackBestMs) .. "ms") or "--")
+			trackCard.lines[3].Text = string.format("Hold %d%% | Req %0.1fs", math.floor((math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress or 0) / math.max(CONFIG.trainerTrackHoldTime, 1)) * 100 + 0.5), CONFIG.trainerTrackHoldTime)
+			trackCard.lines[4].Text = string.format("Speed %d | Streak %d/%d", CONFIG.trainerTargetSpeed, trainer.trackStreak or 0, trainer.trackBestStreak or 0)
+			trackCard.frame.BackgroundColor3 = trackActive and Color3.fromRGB(40, 35, 23) or Color3.fromRGB(22, 27, 37)
+			if trackStroke then
+				trackStroke.Transparency = trackActive and 0.18 or 0.72
+			end
+		end
+
+		if tracerSliders.trainingResultsRow and tracerSliders.trainingResults then
+			local results = miniHudLabels.utility.trainer.lastResults
+			tracerSliders.trainingResultsRow.Visible = results ~= nil
+			if results then
+				tracerSliders.trainingResultsRow.BackgroundColor3 = trainerAccent:Lerp(Color3.fromRGB(20, 24, 33), 0.78)
+				local resultsStroke = tracerSliders.trainingResultsRow:FindFirstChildOfClass("UIStroke")
+				if resultsStroke then
+					resultsStroke.Color = trainerAccent
+					resultsStroke.Transparency = 0.3
+				end
+				tracerSliders.trainingResults.badge.Text = string.upper(results.drill or "RUN")
+				tracerSliders.trainingResults.badge.BackgroundColor3 = trainerAccent:Lerp(Color3.fromRGB(255, 255, 255), 0.18)
+				tracerSliders.trainingResults.badge.TextColor3 = THEME.text
+				tracerSliders.trainingResults.lines[1].Text = string.format("Hits %d | Misses %d | Accuracy %d%%", results.hits or 0, results.misses or 0, results.accuracy or 0)
+				tracerSliders.trainingResults.lines[2].Text = string.format("Click Avg %s | Click Best %s", results.clickAverage and (tostring(results.clickAverage) .. "ms") or "--", results.clickBest and (tostring(results.clickBest) .. "ms") or "--")
+				tracerSliders.trainingResults.lines[3].Text = string.format("Track Avg %s | Track Best %s", results.trackAverage and (tostring(results.trackAverage) .. "ms") or "--", results.trackBest and (tostring(results.trackBest) .. "ms") or "--")
+				tracerSliders.trainingResults.lines[4].Text = string.format("Click Peak %d | Track Peak %d | Breaks %d", results.clickPeak or 0, results.trackPeak or 0, results.trackBreaks or 0)
+			else
+				tracerSliders.trainingResultsRow.BackgroundColor3 = THEME.panelAlt
+				local resultsStroke = tracerSliders.trainingResultsRow:FindFirstChildOfClass("UIStroke")
+				if resultsStroke then
+					resultsStroke.Color = THEME.border
+					resultsStroke.Transparency = 0.45
+				end
+			end
+		end
+
+		if tracerSliders.trainingHistoryRow and tracerSliders.trainingHistory then
+			local history = miniHudLabels.utility.trainer.history or {}
+			tracerSliders.trainingHistoryRow.Visible = #history > 0
+			tracerSliders.trainingHistoryRow.BackgroundColor3 = #history > 0 and trainerAccent:Lerp(Color3.fromRGB(20, 24, 33), 0.82) or THEME.panelAlt
+			local historyStroke = tracerSliders.trainingHistoryRow:FindFirstChildOfClass("UIStroke")
+			if historyStroke then
+				historyStroke.Color = #history > 0 and trainerAccent or THEME.border
+				historyStroke.Transparency = #history > 0 and 0.35 or 0.45
+			end
+			tracerSliders.trainingHistory.badge.Text = string.format("%d RUNS", #history)
+			tracerSliders.trainingHistory.badge.BackgroundColor3 = #history > 0 and trainerAccent:Lerp(Color3.fromRGB(255, 255, 255), 0.18) or Color3.fromRGB(35, 40, 53)
+			tracerSliders.trainingHistory.badge.TextColor3 = #history > 0 and THEME.text or THEME.muted
+			for index, line in ipairs(tracerSliders.trainingHistory.lines) do
+				local entry = history[index]
+				if entry then
+					line.Text = string.format(
+						"%d. %s | H %d M %d | ACC %d%% | C %s | T %s",
+						index,
+						string.upper(entry.drill or "RUN"),
+						entry.hits or 0,
+						entry.misses or 0,
+						entry.accuracy or 0,
+						entry.clickBest and (tostring(entry.clickBest) .. "ms") or "--",
+						entry.trackBest and (tostring(entry.trackBest) .. "ms") or "--"
+					)
+				else
+					line.Text = "--"
+				end
+			end
+		end
+	end
+
 end
 
 local function refreshAllEsp()
@@ -5777,6 +6400,10 @@ local function hookCharacter(player)
 			return
 		end
 
+		if player == LOCAL_PLAYER then
+			bindLocalMovementSignals(humanoid)
+		end
+
 		miniHudLabels.utility.lastHealth[player] = humanoid.Health
 
 		humanoid.HealthChanged:Connect(function(health)
@@ -5877,6 +6504,28 @@ applyConfigToggleState = function(configKey, nextState, suppressToast)
 		applyZoomLimitSetting()
 	elseif configKey == "antiAfk" then
 		miniHudLabels.utility.applyAntiAfk()
+	elseif configKey == "aimTrainerMode" then
+		if CONFIG.aimTrainerMode then
+			resetTrainerSession()
+		else
+			miniHudLabels.utility.trainer.targetPosition = nil
+			miniHudLabels.utility.trainer.challengeEndsAt = nil
+			hideTrainerVisuals()
+		end
+	elseif configKey == "trainerChallengeMode" then
+		if CONFIG.trainerChallengeMode then
+			if not CONFIG.aimTrainerMode then
+				CONFIG.aimTrainerMode = true
+				setToggleState(tracerSliders.trainingToggle, true)
+			end
+			resetTrainerSession()
+		else
+			miniHudLabels.utility.trainer.challengeEndsAt = nil
+		end
+	elseif configKey == "trainerShrinkingTargets" or configKey == "trainerReactionTimer" then
+		if CONFIG.aimTrainerMode and not miniHudLabels.utility.trainer.targetPosition then
+			spawnTrainerTarget()
+		end
 	elseif configKey == "fly" and not CONFIG.fly then
 		stopFly()
 	elseif configKey == "walkSpeedEnabled" and not CONFIG.walkSpeedEnabled then
@@ -6103,6 +6752,12 @@ bindToggle(tracerSliders.focusLock, "focusLock")
 bindToggle(tracerSliders.lookDirectionToggle, "showLookDirection")
 bindToggle(tracerSliders.crosshairToggle, "showCrosshair")
 bindToggle(tracerSliders.fovCircleToggle, "showFovCircle")
+bindToggle(tracerSliders.trainingToggle, "aimTrainerMode")
+bindToggle(tracerSliders.trainingReactionToggle, "trainerReactionTimer")
+bindToggle(tracerSliders.trainingChallengeToggle, "trainerChallengeMode")
+bindToggle(tracerSliders.trainingShrinkingToggle, "trainerShrinkingTargets")
+bindToggle(tracerSliders.recoilVisualizerToggle, "recoilVisualizer")
+bindToggle(tracerSliders.spreadVisualizerToggle, "spreadVisualizer")
 bindToggle(miniHudLabels.utility.controls.miniHudToggle, "showMiniHud")
 bindToggle(viewButtons.removeZoomLimit, "removeZoomLimit")
 bindToggle(playerButtons.walkSpeedToggle, "walkSpeedEnabled")
@@ -6136,6 +6791,12 @@ for configKey, button in pairs({
 	showLookDirection = tracerSliders.lookDirectionToggle,
 	showCrosshair = tracerSliders.crosshairToggle,
 	showFovCircle = tracerSliders.fovCircleToggle,
+	aimTrainerMode = tracerSliders.trainingToggle,
+	trainerReactionTimer = tracerSliders.trainingReactionToggle,
+	trainerChallengeMode = tracerSliders.trainingChallengeToggle,
+	trainerShrinkingTargets = tracerSliders.trainingShrinkingToggle,
+	recoilVisualizer = tracerSliders.recoilVisualizerToggle,
+	spreadVisualizer = tracerSliders.spreadVisualizerToggle,
 	showMiniHud = miniHudLabels.utility.controls.miniHudToggle,
 	removeZoomLimit = viewButtons.removeZoomLimit,
 	walkSpeedEnabled = playerButtons.walkSpeedToggle,
@@ -6230,6 +6891,614 @@ function refreshPresetDropdown()
 	end
 end
 
+function spawnTrainerTarget()
+	local camera = getCamera()
+	if not camera then
+		return
+	end
+	local trainer = miniHudLabels.utility.trainer
+	local viewport = camera.ViewportSize
+	local margin = math.max(36, CONFIG.fovRadius * 0.35)
+	local minX = margin
+	local maxX = math.max(margin + 1, viewport.X - margin)
+	local minY = margin + 24
+	local maxY = math.max(minY + 1, viewport.Y - margin)
+	trainer.targetPosition = Vector2.new(
+		math.random(math.floor(minX), math.floor(maxX)),
+		math.random(math.floor(minY), math.floor(maxY))
+	)
+	trainer.targetSpawnAt = tick()
+	trainer.holdProgress = 0
+	local angle = math.rad(math.random(0, 359))
+	trainer.targetVelocity = Vector2.new(math.cos(angle), math.sin(angle)) * CONFIG.trainerTargetSpeed
+end
+
+function recordTrainerClickSuccess(elapsedMs)
+	local trainer = miniHudLabels.utility.trainer
+	local shouldSave = false
+	trainer.hits = trainer.hits + 1
+	trainer.clickHits = (trainer.clickHits or 0) + 1
+	trainer.clickTotalMs = (trainer.clickTotalMs or 0) + elapsedMs
+	trainer.clickStreak = (trainer.clickStreak or 0) + 1
+	if trainer.clickStreak > (trainer.clickBestStreak or 0) then
+		trainer.clickBestStreak = trainer.clickStreak
+		shouldSave = true
+	end
+	trainer.trackStreak = 0
+	trainer.lastReactionMs = elapsedMs
+	if trainer.clickBestMs == nil or elapsedMs < trainer.clickBestMs then
+		trainer.clickBestMs = elapsedMs
+		shouldSave = true
+	end
+	if trainer.bestReactionMs == nil or elapsedMs < trainer.bestReactionMs then
+		trainer.bestReactionMs = elapsedMs
+	end
+	if shouldSave then
+		saveSettings()
+	end
+end
+
+function recordTrainerClickMiss()
+	local trainer = miniHudLabels.utility.trainer
+	trainer.misses = trainer.misses + 1
+	trainer.clickMisses = (trainer.clickMisses or 0) + 1
+	trainer.clickStreak = 0
+end
+
+function recordTrainerTrackSuccess(elapsedMs)
+	local trainer = miniHudLabels.utility.trainer
+	local shouldSave = false
+	trainer.hits = trainer.hits + 1
+	trainer.trackHits = (trainer.trackHits or 0) + 1
+	trainer.trackTotalMs = (trainer.trackTotalMs or 0) + elapsedMs
+	trainer.trackStreak = (trainer.trackStreak or 0) + 1
+	if trainer.trackStreak > (trainer.trackBestStreak or 0) then
+		trainer.trackBestStreak = trainer.trackStreak
+		shouldSave = true
+	end
+	trainer.clickStreak = 0
+	trainer.lastReactionMs = elapsedMs
+	if trainer.trackBestMs == nil or elapsedMs < trainer.trackBestMs then
+		trainer.trackBestMs = elapsedMs
+		shouldSave = true
+	end
+	if trainer.bestReactionMs == nil or elapsedMs < trainer.bestReactionMs then
+		trainer.bestReactionMs = elapsedMs
+	end
+	if shouldSave then
+		saveSettings()
+	end
+end
+
+function recordTrainerTrackBreak()
+	local trainer = miniHudLabels.utility.trainer
+	trainer.trackBreaks = (trainer.trackBreaks or 0) + 1
+	trainer.trackStreak = 0
+end
+
+function resetTrainerSession()
+	local trainer = miniHudLabels.utility.trainer
+	trainer.hits = 0
+	trainer.misses = 0
+	trainer.lastReactionMs = nil
+	trainer.bestReactionMs = nil
+	trainer.clickHits = 0
+	trainer.clickMisses = 0
+	trainer.clickTotalMs = 0
+	trainer.clickStreak = 0
+	trainer.trackHits = 0
+	trainer.trackBreaks = 0
+	trainer.trackTotalMs = 0
+	trainer.trackStreak = 0
+	trainer.targetSpawnAt = 0
+	trainer.challengeEndsAt = CONFIG.trainerChallengeMode and (tick() + CONFIG.trainerChallengeDuration) or nil
+	trainer.lastResults = nil
+	trainer.holdProgress = 0
+	spawnTrainerTarget()
+end
+
+function hideTrainerVisuals()
+	local trainer = miniHudLabels.utility.trainer
+	for _, key in ipairs({ "targetDot", "hitWindowCircle", "spreadCircle", "recoilMarker" }) do
+		local object = trainer[key]
+		if object then
+			object.Visible = false
+		end
+	end
+	if trainer.trackProgressRing then
+		for _, segment in ipairs(trainer.trackProgressRing) do
+			segment.Visible = false
+		end
+	end
+end
+
+function ensureTrainerCircle(key, filled)
+	local trainer = miniHudLabels.utility.trainer
+	if not trainer[key] then
+		trainer[key] = createDrawing("Circle")
+		if not trainer[key] then
+			return nil
+		end
+		trainer[key].Filled = filled == true
+		trainer[key].NumSides = 40
+		trainer[key].Transparency = 1
+	end
+	return trainer[key]
+end
+
+function ensureTrainerProgressRing()
+	local trainer = miniHudLabels.utility.trainer
+	if trainer.trackProgressRing then
+		return trainer.trackProgressRing
+	end
+
+	trainer.trackProgressRing = {}
+	for _ = 1, 18 do
+		local segment = createDrawing("Line")
+		if segment then
+			segment.Thickness = 2
+			segment.Transparency = 0.95
+			table.insert(trainer.trackProgressRing, segment)
+		end
+	end
+
+	if #trainer.trackProgressRing ~= 18 then
+		for _, segment in ipairs(trainer.trackProgressRing) do
+			segment:Remove()
+		end
+		trainer.trackProgressRing = nil
+	end
+
+	return trainer.trackProgressRing
+end
+
+function updateTrainerProgressRing(center, radius, progress)
+	local ring = ensureTrainerProgressRing()
+	if not ring then
+		return
+	end
+
+	local visibleSegments = math.floor(math.clamp(progress, 0, 1) * #ring + 0.5)
+	for index, segment in ipairs(ring) do
+		if index <= visibleSegments then
+			local startAngle = math.rad(-90 + ((index - 1) / #ring) * 360)
+			local endAngle = math.rad(-90 + (index / #ring) * 360)
+			segment.Visible = true
+			segment.Color = THEME.focus
+			segment.From = center + Vector2.new(math.cos(startAngle), math.sin(startAngle)) * radius
+			segment.To = center + Vector2.new(math.cos(endAngle), math.sin(endAngle)) * radius
+		else
+			segment.Visible = false
+		end
+	end
+end
+
+function buildTrainerChallengeSummary()
+	local trainer = miniHudLabels.utility.trainer
+	local clickShots = math.max(1, (trainer.clickHits or 0) + (trainer.clickMisses or 0))
+	local accuracy = math.floor(((trainer.hits or 0) / math.max(1, (trainer.hits or 0) + (trainer.misses or 0))) * 100 + 0.5)
+	return {
+		drill = CONFIG.trainerDrillType,
+		hits = trainer.hits or 0,
+		misses = trainer.misses or 0,
+		accuracy = accuracy,
+		clickAverage = (trainer.clickHits or 0) > 0 and math.floor((trainer.clickTotalMs or 0) / math.max(trainer.clickHits, 1) + 0.5) or nil,
+		clickBest = trainer.clickBestMs,
+		clickAccuracy = math.floor(((trainer.clickHits or 0) / clickShots) * 100 + 0.5),
+		clickPeak = trainer.clickBestStreak or 0,
+		trackAverage = (trainer.trackHits or 0) > 0 and math.floor((trainer.trackTotalMs or 0) / math.max(trainer.trackHits, 1) + 0.5) or nil,
+		trackBest = trainer.trackBestMs,
+		trackBreaks = trainer.trackBreaks or 0,
+		trackPeak = trainer.trackBestStreak or 0,
+	}
+end
+
+function pushTrainerHistoryEntry(summary)
+	local trainer = miniHudLabels.utility.trainer
+	if type(summary) ~= "table" then
+		return
+	end
+
+	trainer.history = trainer.history or {}
+	table.insert(trainer.history, 1, {
+		drill = summary.drill,
+		hits = summary.hits,
+		misses = summary.misses,
+		accuracy = summary.accuracy,
+		clickBest = summary.clickBest,
+		trackBest = summary.trackBest,
+	})
+
+	while #trainer.history > 4 do
+		table.remove(trainer.history)
+	end
+end
+
+function getTrainerPresetBadgeText(presetName)
+	if presetName == "Warmup" then
+		return "CLICK"
+	end
+	if presetName == "Precision" then
+		return "PRECISE"
+	end
+	if presetName == "Tracking" then
+		return "TRACK"
+	end
+	if presetName == "Speed" then
+		return "FAST"
+	end
+	if presetName == "Micro Adjust" then
+		return "MICRO"
+	end
+	if presetName == "Custom 1" then
+		local slot = TRAINER_CUSTOM_PRESETS[presetName]
+		return (type(slot) == "table" and type(slot.badge) == "string" and slot.badge ~= "") and slot.badge or "USER 1"
+	end
+	if presetName == "Custom 2" then
+		local slot = TRAINER_CUSTOM_PRESETS[presetName]
+		return (type(slot) == "table" and type(slot.badge) == "string" and slot.badge ~= "") and slot.badge or "USER 2"
+	end
+	return ""
+end
+
+function getTrainerCustomLabel(slotName)
+	local slot = TRAINER_CUSTOM_PRESETS[slotName]
+	if type(slot) == "table" and type(slot.label) == "string" and slot.label ~= "" then
+		return truncateText(slot.label, 14)
+	end
+	return slotName
+end
+
+function getTrainerCustomBadge(slotName)
+	local slot = TRAINER_CUSTOM_PRESETS[slotName]
+	if type(slot) == "table" and type(slot.badge) == "string" and slot.badge ~= "" then
+		return truncateText(slot.badge, 10)
+	end
+	return slotName == "Custom 1" and "USER 1" or "USER 2"
+end
+
+function getTrainerPresetColor(presetName)
+	if presetName == "Warmup" then
+		return Color3.fromRGB(88, 166, 255)
+	end
+	if presetName == "Precision" then
+		return Color3.fromRGB(255, 214, 102)
+	end
+	if presetName == "Tracking" then
+		return Color3.fromRGB(117, 255, 160)
+	end
+	if presetName == "Speed" then
+		return Color3.fromRGB(255, 116, 116)
+	end
+	if presetName == "Micro Adjust" then
+		return Color3.fromRGB(255, 2, 127)
+	end
+	if presetName == "Custom 1" then
+		return Color3.fromRGB(162, 129, 255)
+	end
+	if presetName == "Custom 2" then
+		return Color3.fromRGB(255, 154, 76)
+	end
+	return THEME.accent
+end
+
+function captureTrainerPresetSettings()
+	return {
+		aimTrainerMode = true,
+		trainerDrillType = CONFIG.trainerDrillType,
+		trainerReactionTimer = CONFIG.trainerReactionTimer,
+		trainerHitWindow = CONFIG.trainerHitWindow,
+		trainerChallengeMode = CONFIG.trainerChallengeMode,
+		trainerChallengeDuration = CONFIG.trainerChallengeDuration,
+		trainerShrinkingTargets = CONFIG.trainerShrinkingTargets,
+		trainerTrackHoldTime = CONFIG.trainerTrackHoldTime,
+		trainerTargetSpeed = CONFIG.trainerTargetSpeed,
+	}
+end
+
+function applyTrainerPresetSettings(settings)
+	if type(settings) ~= "table" then
+		return false
+	end
+
+	CONFIG.aimTrainerMode = settings.aimTrainerMode ~= false
+	CONFIG.trainerDrillType = settings.trainerDrillType or CONFIG.trainerDrillType
+	CONFIG.trainerReactionTimer = settings.trainerReactionTimer ~= false
+	CONFIG.trainerHitWindow = settings.trainerHitWindow or CONFIG.trainerHitWindow
+	CONFIG.trainerChallengeMode = settings.trainerChallengeMode == true
+	CONFIG.trainerChallengeDuration = settings.trainerChallengeDuration or CONFIG.trainerChallengeDuration
+	CONFIG.trainerShrinkingTargets = settings.trainerShrinkingTargets == true
+	CONFIG.trainerTrackHoldTime = settings.trainerTrackHoldTime or CONFIG.trainerTrackHoldTime
+	CONFIG.trainerTargetSpeed = settings.trainerTargetSpeed or CONFIG.trainerTargetSpeed
+	return true
+end
+
+function saveTrainerCustomPreset(slotName)
+	if TRAINER_CUSTOM_PRESETS[slotName] == nil then
+		return false
+	end
+	TRAINER_CUSTOM_PRESETS[slotName].settings = captureTrainerPresetSettings()
+	saveSettings()
+	return true
+end
+
+function renameTrainerCustomPreset(slotName, newLabel)
+	if TRAINER_CUSTOM_PRESETS[slotName] == nil then
+		return false
+	end
+
+	newLabel = tostring(newLabel or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if newLabel == "" then
+		newLabel = slotName
+	end
+
+	TRAINER_CUSTOM_PRESETS[slotName].label = truncateText(newLabel, 18)
+	saveSettings()
+	return true
+end
+
+function retagTrainerCustomPreset(slotName, newBadge)
+	if TRAINER_CUSTOM_PRESETS[slotName] == nil then
+		return false
+	end
+
+	newBadge = tostring(newBadge or ""):upper():gsub("^%s+", ""):gsub("%s+$", "")
+	if newBadge == "" then
+		newBadge = slotName == "Custom 1" and "USER 1" or "USER 2"
+	end
+
+	TRAINER_CUSTOM_PRESETS[slotName].badge = truncateText(newBadge, 10)
+	saveSettings()
+	return true
+end
+
+function styleTrainerPresetButtons()
+	if not tracerSliders or not tracerSliders.trainingPresetButtons or not tracerSliders.trainingPresetButtons[1] then
+		return
+	end
+
+	local holder = tracerSliders.trainingPresetButtons[1].button.Parent
+	local row = holder and holder.Parent
+	if row then
+		row.Size = UDim2.new(1, 0, 0, 96)
+	end
+	if holder then
+		holder.Position = UDim2.new(0, 10, 0, 22)
+		holder.Size = UDim2.new(1, -20, 0, 64)
+		local listLayout = holder:FindFirstChildOfClass("UIListLayout")
+		if listLayout then
+			listLayout:Destroy()
+		end
+		if not holder:FindFirstChildOfClass("UIGridLayout") then
+			create("UIGridLayout", {
+				CellPadding = UDim2.new(0, 4, 0, 4),
+				CellSize = UDim2.new(0.25, -3, 0, 30),
+				FillDirectionMaxCells = 4,
+				HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Parent = holder,
+			})
+		end
+	end
+
+	for _, entry in ipairs(tracerSliders.trainingPresetButtons) do
+		local badgeText = getTrainerPresetBadgeText(entry.value)
+		entry.button:SetAttribute("TrainerPresetButton", true)
+		entry.button:SetAttribute("PresetColor", getTrainerPresetColor(entry.value))
+		local displayName = (entry.value == "Custom 1" or entry.value == "Custom 2") and getTrainerCustomLabel(entry.value) or entry.value
+		entry.button.Size = UDim2.new(1, 0, 1, 0)
+		entry.button.Text = string.format("%s\n%s", displayName, badgeText)
+		entry.button.TextSize = 7
+		entry.button.Font = Enum.Font.GothamBold
+		entry.button.TextYAlignment = Enum.TextYAlignment.Center
+		entry.button.TextWrapped = true
+		entry.button.RichText = false
+	end
+end
+
+function getActiveTrainerPresetName()
+	for slotName, settings in pairs(TRAINER_CUSTOM_PRESETS) do
+		local savedSettings = type(settings) == "table" and settings.settings or nil
+		if type(savedSettings) == "table"
+			and (savedSettings.trainerDrillType or CONFIG.trainerDrillType) == CONFIG.trainerDrillType
+			and (savedSettings.trainerReactionTimer ~= false) == CONFIG.trainerReactionTimer
+			and (savedSettings.trainerHitWindow or CONFIG.trainerHitWindow) == CONFIG.trainerHitWindow
+			and (savedSettings.trainerChallengeMode == true) == CONFIG.trainerChallengeMode
+			and (savedSettings.trainerChallengeDuration or CONFIG.trainerChallengeDuration) == CONFIG.trainerChallengeDuration
+			and (savedSettings.trainerShrinkingTargets == true) == CONFIG.trainerShrinkingTargets
+			and (savedSettings.trainerTrackHoldTime or CONFIG.trainerTrackHoldTime) == CONFIG.trainerTrackHoldTime
+			and (savedSettings.trainerTargetSpeed or CONFIG.trainerTargetSpeed) == CONFIG.trainerTargetSpeed then
+			return slotName
+		end
+	end
+	if CONFIG.trainerDrillType == "Click" and CONFIG.trainerShrinkingTargets and CONFIG.trainerHitWindow <= 10 and CONFIG.trainerTargetSpeed <= 110 then
+		return "Micro Adjust"
+	end
+	if CONFIG.trainerDrillType == "Click" and not CONFIG.trainerShrinkingTargets and CONFIG.trainerHitWindow <= 18 and CONFIG.trainerChallengeDuration <= 20 and CONFIG.trainerTargetSpeed >= 160 then
+		return "Speed"
+	end
+	if CONFIG.trainerDrillType == "Track" and CONFIG.trainerTrackHoldTime >= 3 and CONFIG.trainerTargetSpeed >= 140 then
+		return "Tracking"
+	end
+	if CONFIG.trainerDrillType == "Click" and CONFIG.trainerShrinkingTargets and CONFIG.trainerHitWindow <= 14 then
+		return "Precision"
+	end
+	if CONFIG.trainerDrillType == "Click" and not CONFIG.trainerShrinkingTargets and CONFIG.trainerHitWindow >= 20 then
+		return "Warmup"
+	end
+	return nil
+end
+
+function applyTrainerPreset(presetName)
+	if TRAINER_CUSTOM_PRESETS[presetName] ~= nil then
+		if not applyTrainerPresetSettings(TRAINER_CUSTOM_PRESETS[presetName].settings) then
+			showToast("Aim Trainer", string.format("%s is empty", getTrainerCustomLabel(presetName)), THEME.muted)
+			return
+		end
+		resetTrainerSession()
+		syncUiFromConfig()
+		saveSettings()
+		showToast("Aim Trainer", string.format("%s preset applied", getTrainerCustomLabel(presetName)), getTrainerPresetColor(presetName))
+		return
+	end
+
+	for _, preset in ipairs(TRAINER_PRESET_DEFS) do
+		if preset.name == presetName then
+			preset.apply()
+			resetTrainerSession()
+			syncUiFromConfig()
+			saveSettings()
+			showToast("Aim Trainer", string.format("%s preset applied", preset.name), THEME.accent)
+			return
+		end
+	end
+end
+
+styleTrainerPresetButtons()
+
+function updateTrainerVisuals(deltaTime)
+	local trainer = miniHudLabels.utility.trainer
+	trainer.spreadValue = math.max(0, trainer.spreadValue - (deltaTime * 20))
+	trainer.recoilKick = math.max(0, trainer.recoilKick - (deltaTime * 26))
+	trainer.recoilOffset = trainer.recoilOffset:Lerp(Vector2.zero, math.clamp(deltaTime * 9, 0, 1))
+
+	if not gui.Enabled then
+		hideTrainerVisuals()
+		return
+	end
+
+	local mouseLocation = UserInputService:GetMouseLocation()
+	local center = mouseLocation and Vector2.new(mouseLocation.X, mouseLocation.Y) or Vector2.zero
+
+	if CONFIG.aimTrainerMode then
+		if not trainer.targetPosition then
+			spawnTrainerTarget()
+		end
+		local targetDot = ensureTrainerCircle("targetDot", true)
+		local hitWindowCircle = ensureTrainerCircle("hitWindowCircle", false)
+		local camera = getCamera()
+		if CONFIG.trainerDrillType == "Track" and trainer.targetPosition and camera then
+			local viewport = camera.ViewportSize
+			local radius = CONFIG.trainerShrinkingTargets and math.max(3, 8 - (trainer.hits * 0.2)) or 6
+			local nextPosition = trainer.targetPosition + (trainer.targetVelocity * deltaTime)
+			if nextPosition.X <= radius or nextPosition.X >= viewport.X - radius then
+				trainer.targetVelocity = Vector2.new(-trainer.targetVelocity.X, trainer.targetVelocity.Y)
+			end
+			if nextPosition.Y <= radius + 24 or nextPosition.Y >= viewport.Y - radius then
+				trainer.targetVelocity = Vector2.new(trainer.targetVelocity.X, -trainer.targetVelocity.Y)
+			end
+			trainer.targetVelocity = trainer.targetVelocity.Unit * CONFIG.trainerTargetSpeed
+			trainer.targetPosition = trainer.targetPosition + (trainer.targetVelocity * deltaTime)
+		end
+		if targetDot and trainer.targetPosition then
+			local targetRadius = CONFIG.trainerShrinkingTargets and math.max(3, 8 - (trainer.hits * 0.2)) or 6
+			targetDot.Visible = true
+			targetDot.Color = THEME.focus
+			targetDot.Radius = targetRadius
+			targetDot.Position = trainer.targetPosition
+			targetDot.Transparency = 1
+			if CONFIG.trainerDrillType == "Track" then
+				updateTrainerProgressRing(trainer.targetPosition, targetRadius + 8, math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress or 0) / math.max(CONFIG.trainerTrackHoldTime, 1))
+			elseif trainer.trackProgressRing then
+				for _, segment in ipairs(trainer.trackProgressRing) do
+					segment.Visible = false
+				end
+			end
+		end
+		if hitWindowCircle and trainer.targetPosition then
+			hitWindowCircle.Visible = true
+			hitWindowCircle.Color = CONFIG.trainerDrillType == "Track" and THEME.focus or THEME.accent
+			hitWindowCircle.Thickness = 1.5
+			hitWindowCircle.Radius = CONFIG.trainerDrillType == "Track" and (CONFIG.trainerHitWindow + 2) or CONFIG.trainerHitWindow
+			hitWindowCircle.Position = trainer.targetPosition
+			hitWindowCircle.Transparency = 0.75
+		end
+
+		if CONFIG.trainerDrillType == "Track" and trainer.targetPosition and mouseLocation then
+			local hoverPosition = Vector2.new(mouseLocation.X, mouseLocation.Y)
+			if (hoverPosition - trainer.targetPosition).Magnitude <= (CONFIG.trainerHitWindow + 2) then
+				trainer.holdProgress = math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress + deltaTime)
+				if trainer.holdProgress >= CONFIG.trainerTrackHoldTime then
+					recordTrainerTrackSuccess(math.floor((tick() - trainer.targetSpawnAt) * 1000 + 0.5))
+					spawnTrainerTarget()
+				end
+			else
+				if trainer.holdProgress > 0 then
+					recordTrainerTrackBreak()
+				end
+				trainer.holdProgress = 0
+			end
+		end
+	else
+		trainer.targetPosition = nil
+		trainer.holdProgress = 0
+		local targetDot = trainer.targetDot
+		local hitWindowCircle = trainer.hitWindowCircle
+		if targetDot then
+			targetDot.Visible = false
+		end
+		if hitWindowCircle then
+			hitWindowCircle.Visible = false
+		end
+		if trainer.trackProgressRing then
+			for _, segment in ipairs(trainer.trackProgressRing) do
+				segment.Visible = false
+			end
+		end
+	end
+
+	if CONFIG.spreadVisualizer then
+		local spreadCircle = ensureTrainerCircle("spreadCircle", false)
+		if spreadCircle then
+			spreadCircle.Visible = true
+			spreadCircle.Color = THEME.muted
+			spreadCircle.Thickness = 1.2
+			spreadCircle.Position = center
+			spreadCircle.Radius = 10 + trainer.spreadValue
+			spreadCircle.Transparency = 0.65
+		end
+	elseif trainer.spreadCircle then
+		trainer.spreadCircle.Visible = false
+	end
+
+	if CONFIG.recoilVisualizer then
+		local recoilMarker = ensureTrainerCircle("recoilMarker", true)
+		if recoilMarker then
+			recoilMarker.Visible = true
+			recoilMarker.Color = THEME.accent
+			recoilMarker.Radius = 3
+			recoilMarker.Position = center + trainer.recoilOffset
+			recoilMarker.Transparency = math.clamp(0.35 + (trainer.recoilKick * 0.06), 0.35, 1)
+		end
+	elseif trainer.recoilMarker then
+		trainer.recoilMarker.Visible = false
+	end
+
+	if CONFIG.trainerChallengeMode and trainer.challengeEndsAt and tick() >= trainer.challengeEndsAt then
+		CONFIG.trainerChallengeMode = false
+		trainer.challengeEndsAt = nil
+		trainer.targetPosition = nil
+		trainer.lastResults = buildTrainerChallengeSummary()
+		pushTrainerHistoryEntry(trainer.lastResults)
+		if tracerSliders.trainingChallengeToggle then
+			setToggleState(tracerSliders.trainingChallengeToggle, false)
+		end
+		saveSettings()
+		showToast(
+			"Aim Trainer",
+			string.format(
+				"Challenge complete\nHits %d | Misses %d | Accuracy %d%%\nClick Best %s | Track Best %s",
+				trainer.lastResults.hits or 0,
+				trainer.lastResults.misses or 0,
+				trainer.lastResults.accuracy or 0,
+				trainer.lastResults.clickBest and (tostring(trainer.lastResults.clickBest) .. "ms") or "--",
+				trainer.lastResults.trackBest and (tostring(trainer.lastResults.trackBest) .. "ms") or "--"
+			),
+			THEME.accent
+		)
+	end
+end
+
 updateControlAvailability = function()
 	setRowEnabled(miniHudLabels.utility.displayToggles.boxMode, CONFIG.showBoxes)
 	setRowEnabled(miniHudLabels.utility.displayToggles.headDotSize.bar, CONFIG.showHeadDot)
@@ -6248,6 +7517,19 @@ updateControlAvailability = function()
 	setRowEnabled(tracerSliders.fovThickness.bar, CONFIG.showFovCircle)
 	setRowEnabled(tracerSliders.fovTransparency.bar, CONFIG.showFovCircle)
 	setRowEnabled(tracerSliders.fovCircleSlider.reset, CONFIG.showFovCircle)
+	setRowEnabled(tracerSliders.trainingDrillType, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingReactionToggle, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingCardsRow, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingPresetButtons[1].button.Parent.Parent, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingSaveButtons[1].button.Parent.Parent, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingRenameRow, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingHitWindow.bar, CONFIG.aimTrainerMode and CONFIG.trainerDrillType == "Click")
+	setRowEnabled(tracerSliders.trainingChallengeToggle, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingChallengeDuration.bar, CONFIG.aimTrainerMode and CONFIG.trainerChallengeMode)
+	setRowEnabled(tracerSliders.trainingShrinkingToggle, CONFIG.aimTrainerMode)
+	setRowEnabled(tracerSliders.trainingTrackHoldTime.bar, CONFIG.aimTrainerMode and CONFIG.trainerDrillType == "Track")
+	setRowEnabled(tracerSliders.trainingTargetSpeed.bar, CONFIG.aimTrainerMode and CONFIG.trainerDrillType == "Track")
+	setRowEnabled(tracerSliders.trainingReset, CONFIG.aimTrainerMode)
 	setRowEnabled(playerButtons.walkSpeed.bar, CONFIG.walkSpeedEnabled)
 	setRowEnabled(playerButtons.flySpeed.bar, CONFIG.fly)
 end
@@ -6281,6 +7563,42 @@ syncUiFromConfig = function()
 	setToggleState(tracerSliders.lookDirectionToggle, CONFIG.showLookDirection)
 	setToggleState(tracerSliders.crosshairToggle, CONFIG.showCrosshair)
 	setToggleState(tracerSliders.fovCircleToggle, CONFIG.showFovCircle)
+	setToggleState(tracerSliders.trainingToggle, CONFIG.aimTrainerMode)
+	setOptionButtonsState(tracerSliders.trainingPresetButtons, getActiveTrainerPresetName())
+	setOptionButtonsState(tracerSliders.trainingSaveButtons, nil)
+	if tracerSliders.trainingPresetButtons and tracerSliders.trainingPresetButtons[1] then
+		local presetHolder = tracerSliders.trainingPresetButtons[1].button.Parent
+		local presetRow = presetHolder and presetHolder.Parent
+		local presetLabel = presetRow and presetRow:FindFirstChildWhichIsA("TextLabel")
+		if presetLabel then
+			local activeTrainerPreset = getActiveTrainerPresetName()
+			if activeTrainerPreset then
+				presetLabel.Text = "TRAIN PRESET"
+				presetLabel.TextColor3 = THEME.muted
+			else
+				presetLabel.Text = "TRAIN PRESET  [CUSTOM]"
+				presetLabel.TextColor3 = THEME.focus
+			end
+		end
+	end
+	if tracerSliders.trainingSaveButtons then
+		for _, entry in ipairs(tracerSliders.trainingSaveButtons) do
+			local filled = type(TRAINER_CUSTOM_PRESETS[entry.value]) == "table" and type(TRAINER_CUSTOM_PRESETS[entry.value].settings) == "table"
+			entry.button.TextColor3 = filled and getTrainerPresetColor(entry.value) or THEME.muted
+		end
+	end
+	if tracerSliders.trainingRenameButtons then
+		for slotName, button in pairs(tracerSliders.trainingRenameButtons) do
+			button.Text = slotName == "Custom 1" and "SLOT 1" or "SLOT 2"
+			button.TextColor3 = getTrainerPresetColor(slotName)
+		end
+	end
+	tracerSliders.trainingDrillType.Text = CONFIG.trainerDrillType
+	setToggleState(tracerSliders.trainingReactionToggle, CONFIG.trainerReactionTimer)
+	setToggleState(tracerSliders.trainingChallengeToggle, CONFIG.trainerChallengeMode)
+	setToggleState(tracerSliders.trainingShrinkingToggle, CONFIG.trainerShrinkingTargets)
+	setToggleState(tracerSliders.recoilVisualizerToggle, CONFIG.recoilVisualizer)
+	setToggleState(tracerSliders.spreadVisualizerToggle, CONFIG.spreadVisualizer)
 	setToggleState(miniHudLabels.utility.controls.miniHudToggle, CONFIG.showMiniHud)
 	setToggleState(viewButtons.removeZoomLimit, CONFIG.removeZoomLimit)
 	setToggleState(playerButtons.walkSpeedToggle, CONFIG.walkSpeedEnabled)
@@ -6299,6 +7617,10 @@ syncUiFromConfig = function()
 	applyMinimalMode(CONFIG.minimalMode, true)
 	updateControlAvailability()
 	setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
+	setSliderState(tracerSliders.trainingHitWindow, CONFIG.trainerHitWindow)
+	setSliderState(tracerSliders.trainingChallengeDuration, CONFIG.trainerChallengeDuration)
+	setSliderState(tracerSliders.trainingTrackHoldTime, CONFIG.trainerTrackHoldTime)
+	setSliderState(tracerSliders.trainingTargetSpeed, CONFIG.trainerTargetSpeed)
 	setSliderState(miniHudLabels.utility.controls.cameraFovSlider, CONFIG.cameraFov)
 	setSliderState(playerButtons.walkSpeed, CONFIG.walkSpeed)
 	setSliderState(playerButtons.flySpeed, CONFIG.flySpeed)
@@ -6385,6 +7707,69 @@ tracerSliders.style.MouseButton1Click:Connect(function()
 	refreshAllEsp()
 	showToast("Setting Updated", string.format("Tracer Style set to %s", CONFIG.tracerStyle), THEME.accent)
 end)
+
+tracerSliders.trainingDrillType.MouseButton1Click:Connect(function()
+	local options = { "Click", "Track" }
+	local currentIndex = table.find(options, CONFIG.trainerDrillType) or 1
+	currentIndex = currentIndex % #options + 1
+	CONFIG.trainerDrillType = options[currentIndex]
+	resetTrainerSession()
+	syncUiFromConfig()
+	saveSettings()
+	showToast("Aim Trainer", string.format("Drill Type set to %s", CONFIG.trainerDrillType), THEME.accent)
+end)
+
+for _, entry in ipairs(tracerSliders.trainingPresetButtons) do
+	for _, preset in ipairs(TRAINER_PRESET_DEFS) do
+		if preset.name == entry.value then
+			miniHudLabels.bindTooltip(entry.button, preset.description)
+			break
+		end
+	end
+	if entry.value == "Custom 1" or entry.value == "Custom 2" then
+		miniHudLabels.bindTooltip(entry.button, function()
+			local saved = TRAINER_CUSTOM_PRESETS[entry.value]
+			return (type(saved) == "table" and type(saved.settings) == "table")
+				and string.format("%s: saved custom trainer setup", getTrainerCustomLabel(entry.value))
+				or string.format("%s: empty slot", getTrainerCustomLabel(entry.value))
+		end)
+	end
+	entry.button.MouseButton1Click:Connect(function()
+		applyTrainerPreset(entry.value)
+	end)
+end
+
+for _, entry in ipairs(tracerSliders.trainingSaveButtons) do
+	miniHudLabels.bindTooltip(entry.button, function()
+		local saved = TRAINER_CUSTOM_PRESETS[entry.value]
+		return (type(saved) == "table" and type(saved.settings) == "table")
+			and string.format("Overwrite %s with current trainer settings", getTrainerCustomLabel(entry.value))
+			or string.format("Save current trainer settings into %s", getTrainerCustomLabel(entry.value))
+	end)
+	entry.button.MouseButton1Click:Connect(function()
+		if saveTrainerCustomPreset(entry.value) then
+			syncUiFromConfig()
+			showToast("Aim Trainer", string.format("Saved current setup to %s", getTrainerCustomLabel(entry.value)), getTrainerPresetColor(entry.value))
+		end
+	end)
+end
+
+for slotName, button in pairs(tracerSliders.trainingRenameButtons) do
+	miniHudLabels.bindTooltip(button, function()
+		return string.format("Apply the name and badge fields to %s", getTrainerCustomLabel(slotName))
+	end)
+	button.MouseButton1Click:Connect(function()
+		local renamed = renameTrainerCustomPreset(slotName, tracerSliders.trainingRenameInput.Text)
+		local retagged = retagTrainerCustomPreset(slotName, tracerSliders.trainingBadgeInput.Text)
+		if renamed and retagged then
+			tracerSliders.trainingRenameInput.Text = ""
+			tracerSliders.trainingBadgeInput.Text = ""
+			styleTrainerPresetButtons()
+			syncUiFromConfig()
+			showToast("Aim Trainer", string.format("Updated %s [%s]", getTrainerCustomLabel(slotName), getTrainerCustomBadge(slotName)), getTrainerPresetColor(slotName))
+		end
+	end)
+end
 
 miniHudLabels.utility.controls.cameraFovSlider.reset.MouseButton1Click:Connect(function()
 	CONFIG.cameraFov = DEFAULT_CAMERA_FOV
@@ -6592,6 +7977,203 @@ for _, entry in ipairs(crosshairColorButtons) do
 		end
 
 		showToast("Setting Updated", string.format("Crosshair Color set to %s", CONFIG.crosshairColor), accentColor)
+	end)
+end
+
+do
+	miniHudLabels.utility.trainer.draggingHitWindow = false
+	miniHudLabels.utility.trainer.draggingChallengeDuration = false
+	miniHudLabels.utility.trainer.draggingTrackHold = false
+	miniHudLabels.utility.trainer.draggingTargetSpeed = false
+
+	function updateTrainerHitWindowFromX(positionX)
+		local bar = tracerSliders.trainingHitWindow.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+		local value = math.floor(tracerSliders.trainingHitWindow.min + ((tracerSliders.trainingHitWindow.max - tracerSliders.trainingHitWindow.min) * alpha) + 0.5)
+		value = math.clamp(value, tracerSliders.trainingHitWindow.min, tracerSliders.trainingHitWindow.max)
+
+		if CONFIG.trainerHitWindow ~= value then
+			CONFIG.trainerHitWindow = value
+			saveSettings()
+		end
+
+		setSliderState(tracerSliders.trainingHitWindow, CONFIG.trainerHitWindow)
+	end
+
+	tracerSliders.trainingHitWindow.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingHitWindow = true
+			updateTrainerHitWindowFromX(input.Position.X)
+		end
+	end)
+
+	tracerSliders.trainingHitWindow.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingHitWindow = false
+		end
+	end)
+
+	function updateTrainerChallengeDurationFromX(positionX)
+		local bar = tracerSliders.trainingChallengeDuration.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = 0
+		if bar.AbsoluteSize.X > 0 then
+			alpha = relative / bar.AbsoluteSize.X
+		end
+		local value = math.floor(tracerSliders.trainingChallengeDuration.min + ((tracerSliders.trainingChallengeDuration.max - tracerSliders.trainingChallengeDuration.min) * alpha) + 0.5)
+		value = math.clamp(value, tracerSliders.trainingChallengeDuration.min, tracerSliders.trainingChallengeDuration.max)
+
+		if CONFIG.trainerChallengeDuration ~= value then
+			CONFIG.trainerChallengeDuration = value
+			saveSettings()
+		end
+
+		setSliderState(tracerSliders.trainingChallengeDuration, CONFIG.trainerChallengeDuration)
+	end
+
+	tracerSliders.trainingChallengeDuration.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingChallengeDuration = true
+			updateTrainerChallengeDurationFromX(input.Position.X)
+		end
+	end)
+
+	tracerSliders.trainingChallengeDuration.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingChallengeDuration = false
+		end
+	end)
+
+	function updateTrainerTrackHoldFromX(positionX)
+		local bar = tracerSliders.trainingTrackHoldTime.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = bar.AbsoluteSize.X > 0 and (relative / bar.AbsoluteSize.X) or 0
+		local value = math.floor(tracerSliders.trainingTrackHoldTime.min + ((tracerSliders.trainingTrackHoldTime.max - tracerSliders.trainingTrackHoldTime.min) * alpha) + 0.5)
+		value = math.clamp(value, tracerSliders.trainingTrackHoldTime.min, tracerSliders.trainingTrackHoldTime.max)
+		if CONFIG.trainerTrackHoldTime ~= value then
+			CONFIG.trainerTrackHoldTime = value
+			saveSettings()
+		end
+		setSliderState(tracerSliders.trainingTrackHoldTime, CONFIG.trainerTrackHoldTime)
+	end
+
+	function updateTrainerTargetSpeedFromX(positionX)
+		local bar = tracerSliders.trainingTargetSpeed.bar
+		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
+		local alpha = bar.AbsoluteSize.X > 0 and (relative / bar.AbsoluteSize.X) or 0
+		local value = math.floor(tracerSliders.trainingTargetSpeed.min + ((tracerSliders.trainingTargetSpeed.max - tracerSliders.trainingTargetSpeed.min) * alpha) + 0.5)
+		value = math.clamp(value, tracerSliders.trainingTargetSpeed.min, tracerSliders.trainingTargetSpeed.max)
+		if CONFIG.trainerTargetSpeed ~= value then
+			CONFIG.trainerTargetSpeed = value
+			saveSettings()
+		end
+		setSliderState(tracerSliders.trainingTargetSpeed, CONFIG.trainerTargetSpeed)
+	end
+
+	tracerSliders.trainingTrackHoldTime.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingTrackHold = true
+			updateTrainerTrackHoldFromX(input.Position.X)
+		end
+	end)
+
+	tracerSliders.trainingTrackHoldTime.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingTrackHold = false
+		end
+	end)
+
+	tracerSliders.trainingTargetSpeed.bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingTargetSpeed = true
+			updateTrainerTargetSpeedFromX(input.Position.X)
+		end
+	end)
+
+	tracerSliders.trainingTargetSpeed.bar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingTargetSpeed = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if miniHudLabels.utility.trainer.draggingHitWindow and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateTrainerHitWindowFromX(input.Position.X)
+		elseif miniHudLabels.utility.trainer.draggingChallengeDuration and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateTrainerChallengeDurationFromX(input.Position.X)
+		elseif miniHudLabels.utility.trainer.draggingTrackHold and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateTrainerTrackHoldFromX(input.Position.X)
+		elseif miniHudLabels.utility.trainer.draggingTargetSpeed and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateTrainerTargetSpeedFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			miniHudLabels.utility.trainer.draggingHitWindow = false
+			miniHudLabels.utility.trainer.draggingChallengeDuration = false
+			miniHudLabels.utility.trainer.draggingTrackHold = false
+			miniHudLabels.utility.trainer.draggingTargetSpeed = false
+		end
+	end)
+
+	bindSliderValueInput(tracerSliders.trainingHitWindow, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.trainerHitWindow
+		end
+		return math.clamp(math.floor(typedValue + 0.5), tracerSliders.trainingHitWindow.min, tracerSliders.trainingHitWindow.max)
+	end, function(nextValue)
+		if CONFIG.trainerHitWindow ~= nextValue then
+			CONFIG.trainerHitWindow = nextValue
+			saveSettings()
+		end
+	end)
+
+	bindSliderValueInput(tracerSliders.trainingChallengeDuration, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.trainerChallengeDuration
+		end
+		return math.clamp(math.floor(typedValue + 0.5), tracerSliders.trainingChallengeDuration.min, tracerSliders.trainingChallengeDuration.max)
+	end, function(nextValue)
+		if CONFIG.trainerChallengeDuration ~= nextValue then
+			CONFIG.trainerChallengeDuration = nextValue
+			saveSettings()
+		end
+	end)
+
+	bindSliderValueInput(tracerSliders.trainingTrackHoldTime, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.trainerTrackHoldTime
+		end
+		return math.clamp(math.floor(typedValue + 0.5), tracerSliders.trainingTrackHoldTime.min, tracerSliders.trainingTrackHoldTime.max)
+	end, function(nextValue)
+		if CONFIG.trainerTrackHoldTime ~= nextValue then
+			CONFIG.trainerTrackHoldTime = nextValue
+			saveSettings()
+		end
+	end)
+
+	bindSliderValueInput(tracerSliders.trainingTargetSpeed, function(typedValue)
+		if typedValue == nil then
+			return CONFIG.trainerTargetSpeed
+		end
+		return math.clamp(math.floor(typedValue + 0.5), tracerSliders.trainingTargetSpeed.min, tracerSliders.trainingTargetSpeed.max)
+	end, function(nextValue)
+		if CONFIG.trainerTargetSpeed ~= nextValue then
+			CONFIG.trainerTargetSpeed = nextValue
+			saveSettings()
+		end
+	end)
+
+	tracerSliders.trainingReset.MouseButton1Click:Connect(function()
+		miniHudLabels.utility.trainer.history = {}
+		miniHudLabels.utility.trainer.lastResults = nil
+		resetTrainerSession()
+		showToast("Aim Trainer", "Drill reset", THEME.accent)
 	end)
 end
 
@@ -7286,6 +8868,13 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local trainer = miniHudLabels.utility.trainer
+		trainer.spreadValue = math.min(36, trainer.spreadValue + 7)
+		trainer.recoilKick = math.min(18, trainer.recoilKick + 6)
+		trainer.recoilOffset = trainer.recoilOffset + Vector2.new(math.random(-4, 4), -math.random(4, 10))
+	end
+
 	if CONFIG.clickTeleport and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
 		local root = getLocalRoot()
 		local mouse = LOCAL_PLAYER and LOCAL_PLAYER:GetMouse()
@@ -7293,6 +8882,22 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 			root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
 			showToast("Player", "Teleported", THEME.accent)
 			return
+		end
+	end
+
+	if CONFIG.aimTrainerMode and CONFIG.trainerDrillType == "Click" and input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local trainer = miniHudLabels.utility.trainer
+		local mouseLocation = UserInputService:GetMouseLocation()
+		if trainer.targetPosition and mouseLocation then
+			local clickPosition = Vector2.new(mouseLocation.X, mouseLocation.Y)
+			if (clickPosition - trainer.targetPosition).Magnitude <= CONFIG.trainerHitWindow then
+				if trainer.targetSpawnAt and trainer.targetSpawnAt > 0 then
+					recordTrainerClickSuccess(math.floor((tick() - trainer.targetSpawnAt) * 1000 + 0.5))
+				end
+				spawnTrainerTarget()
+			else
+				recordTrainerClickMiss()
+			end
 		end
 	end
 
@@ -7479,6 +9084,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
 	else
 		hideCrosshair()
 	end
+	updateTrainerVisuals(deltaTime)
 	updateMouseIconVisibility()
 	updatePerfStatsUi()
 	updateAccumulator = updateAccumulator + deltaTime
