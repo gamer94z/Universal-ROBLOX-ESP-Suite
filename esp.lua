@@ -983,17 +983,16 @@ end
 local OVERLAY_TOOLS_MODULE_SOURCE = [==[
 return function(context)
 	local releaseTrack = {
-		latestVersion = "1.4",
-		title = "Cleaner UI + Better Intro",
+		latestVersion = "1.4.0",
+		title = "UI Cleanup + New Features",
 		notes = {
-			"The intro now matches the main UI style much more closely.",
-			"The menu feels cleaner and easier to read.",
-			"Key pages were grouped better so settings are easier to find.",
-			"Saved configs are easier to manage.",
-			"Tooltips were improved for settings that were hard to understand.",
-			"Floating panels behave more reliably when moved around.",
-			"Preset selection is simpler and easier to use.",
-			"General polish across visuals, controls, and layout.",
+			"UI cleaned up and made more consistent (intro now matches main menu).",
+			"Pages grouped better for easier navigation.",
+			"Added Infinite Jump.",
+			"Expanded box options, including chams.",
+			"Added empty server joiner.",
+			"Added custom config saver.",
+			"General polish across visuals and controls.",
 		},
 	}
 
