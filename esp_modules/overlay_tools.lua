@@ -8,17 +8,17 @@
 
 return function(context)
 	local releaseTrack = {
-		latestVersion = "1.3.5",
-		title = "UI Polish + Preset Pass",
+		latestVersion = "1.4",
+		title = "Cleaner UI + Better Intro",
 		notes = {
-			"Added minimal mode for a cleaner stripped-down presentation.",
-			"Kept all overlays hidden until the intro animation finishes.",
-			"Stabilized draggable mini HUD, keybind panel, and target card behavior.",
-			"Reworked the utility page with clearer grouping and visual separation.",
-			"Reworked the keybind page with section cards and better scanability.",
-			"Expanded tooltip coverage across utility, visuals, target, player, and perf controls.",
-			"Improved labels for less obvious options like visibility check and Ctrl-click teleport.",
-			"Replaced the preset cycler with a dropdown selector and preset descriptions.",
+			"The intro now matches the main UI style much more closely.",
+			"The menu feels cleaner and easier to read.",
+			"Key pages were grouped better so settings are easier to find.",
+			"Saved configs are easier to manage.",
+			"Tooltips were improved for settings that were hard to understand.",
+			"Floating panels behave more reliably when moved around.",
+			"Preset selection is simpler and easier to use.",
+			"General polish across visuals, controls, and layout.",
 		},
 	}
 
