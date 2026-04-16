@@ -7850,7 +7850,7 @@ local function hideCrosshair()
 end
 
 local function updateMouseIconVisibility()
-	local shouldShowMouseIcon = viewState.freeCamEnabled or (window.Visible and not CONFIG.showCrosshair)
+	local shouldShowMouseIcon = viewState.freeCamEnabled or window.Visible
 	if UserInputService.MouseIconEnabled ~= shouldShowMouseIcon then
 		UserInputService.MouseIconEnabled = shouldShowMouseIcon
 	end
@@ -11470,7 +11470,12 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 
-	if keybindController and keybindController.handleInput(input) then
+	local inputIsMouseButton = input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.MouseButton2
+		or input.UserInputType == Enum.UserInputType.MouseButton3
+	local allowMouseKeybindInput = not window.Visible
+
+	if keybindController and (not inputIsMouseButton or allowMouseKeybindInput) and keybindController.handleInput(input) then
 		return
 	end
 
@@ -11564,7 +11569,12 @@ UserInputService.InputEnded:Connect(function(input)
 		return
 	end
 
-	if keybindController and keybindController.handleInputEnded then
+	local inputIsMouseButton = input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.MouseButton2
+		or input.UserInputType == Enum.UserInputType.MouseButton3
+	local allowMouseKeybindInput = not window.Visible
+
+	if keybindController and keybindController.handleInputEnded and (not inputIsMouseButton or allowMouseKeybindInput) then
 		keybindController.handleInputEnded(input)
 	end
 
