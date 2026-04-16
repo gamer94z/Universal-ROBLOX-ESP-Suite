@@ -15,7 +15,11 @@ local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local LOCAL_PLAYER = Players.LocalPlayer
 
-getgenv().__VYRS_ESP_ACTIVE_TOKEN = tostring(os.clock())
+local SHARED_ENV = (type(getgenv) == "function" and getgenv())
+	or (type(getfenv) == "function" and getfenv(0))
+	or _G
+
+SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN = tostring(os.clock())
 
 local CONFIG = {
 	enabled = true,
@@ -1541,7 +1545,7 @@ local gui = create("ScreenGui", {
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	Parent = CoreGui,
 })
-gui:SetAttribute("ActiveToken", getgenv().__VYRS_ESP_ACTIVE_TOKEN)
+gui:SetAttribute("ActiveToken", SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN)
 
 local watermark = create("Frame", {
 	BackgroundColor3 = Color3.fromRGB(18, 22, 32),
@@ -6964,7 +6968,7 @@ function bindSliderDragStart(guiObject, updateFn, onRelease)
 end
 
 UserInputService.InputChanged:Connect(function(input)
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
@@ -6974,7 +6978,7 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
@@ -11166,7 +11170,7 @@ chrome.minimizeButton.MouseButton1Click:Connect(function()
 end)
 
 window:GetPropertyChangedSignal("Position"):Connect(function()
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
@@ -11439,7 +11443,7 @@ do
 end
 
 UserInputService.JumpRequest:Connect(function()
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
@@ -11462,7 +11466,7 @@ UserInputService.JumpRequest:Connect(function()
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
@@ -11565,7 +11569,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
@@ -11610,7 +11614,7 @@ local function runSafeFrameTask(taskName, taskFn, ...)
 end
 
 RunService.RenderStepped:Connect(function(deltaTime)
-	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
 	end
 
