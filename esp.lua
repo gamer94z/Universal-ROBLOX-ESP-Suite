@@ -94,7 +94,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.4",
+	version = "1.4.1",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	miniHudOffsetX = -1,
@@ -983,16 +983,14 @@ end
 local OVERLAY_TOOLS_MODULE_SOURCE = [==[
 return function(context)
 	local releaseTrack = {
-		latestVersion = "1.4.0",
-		title = "UI Cleanup + New Features",
+		latestVersion = "1.4.1",
+		title = "Stability Fixes + UI Cleanup",
 		notes = {
-			"UI cleaned up and made more consistent (intro now matches main menu).",
-			"Pages grouped better for easier navigation.",
-			"Added Infinite Jump.",
-			"Expanded box options, including chams.",
-			"Added empty server joiner.",
-			"Added custom config saver.",
-			"General polish across visuals and controls.",
+			"Fixed issues that could make the script stop working properly.",
+			"Improved crosshair and mouse-follow behavior.",
+			"Cleaned up the menu so main pages are easier to use.",
+			"Updated the intro and UI styling to feel more consistent.",
+			"Improved overall stability across the main features.",
 		},
 	}
 
@@ -6378,6 +6376,47 @@ miniHudLabels.utility.trainer = miniHudLabels.utility.trainer or {
 	recoilKick = 0,
 	recoilOffset = Vector2.zero,
 }
+
+local function ensureTrainerState()
+	if not miniHudLabels or not miniHudLabels.utility then
+		return nil
+	end
+
+	if type(miniHudLabels.utility.trainer) ~= "table" then
+		miniHudLabels.utility.trainer = {}
+	end
+
+	local trainer = miniHudLabels.utility.trainer
+	trainer.targetPosition = typeof(trainer.targetPosition) == "Vector2" and trainer.targetPosition or nil
+	trainer.targetSpawnAt = tonumber(trainer.targetSpawnAt) or 0
+	trainer.lastReactionMs = tonumber(trainer.lastReactionMs)
+	trainer.bestReactionMs = tonumber(trainer.bestReactionMs)
+	trainer.hits = tonumber(trainer.hits) or 0
+	trainer.misses = tonumber(trainer.misses) or 0
+	trainer.clickHits = tonumber(trainer.clickHits) or 0
+	trainer.clickMisses = tonumber(trainer.clickMisses) or 0
+	trainer.clickTotalMs = tonumber(trainer.clickTotalMs) or 0
+	trainer.clickBestMs = tonumber(trainer.clickBestMs)
+	trainer.clickStreak = tonumber(trainer.clickStreak) or 0
+	trainer.clickBestStreak = tonumber(trainer.clickBestStreak) or 0
+	trainer.trackHits = tonumber(trainer.trackHits) or 0
+	trainer.trackBreaks = tonumber(trainer.trackBreaks) or 0
+	trainer.trackTotalMs = tonumber(trainer.trackTotalMs) or 0
+	trainer.trackBestMs = tonumber(trainer.trackBestMs)
+	trainer.trackStreak = tonumber(trainer.trackStreak) or 0
+	trainer.trackBestStreak = tonumber(trainer.trackBestStreak) or 0
+	trainer.challengeEndsAt = tonumber(trainer.challengeEndsAt)
+	trainer.lastResults = type(trainer.lastResults) == "table" and trainer.lastResults or nil
+	trainer.history = type(trainer.history) == "table" and trainer.history or {}
+	trainer.holdProgress = tonumber(trainer.holdProgress) or 0
+	trainer.targetVelocity = typeof(trainer.targetVelocity) == "Vector2" and trainer.targetVelocity or Vector2.new(110, 76)
+	trainer.spreadValue = tonumber(trainer.spreadValue) or 0
+	trainer.recoilKick = tonumber(trainer.recoilKick) or 0
+	trainer.recoilOffset = typeof(trainer.recoilOffset) == "Vector2" and trainer.recoilOffset or Vector2.zero
+	return trainer
+end
+
+ensureTrainerState()
 if type(loadedTrainerRecords) == "table" then
 	miniHudLabels.utility.trainer.clickBestMs = loadedTrainerRecords.clickBestMs
 	miniHudLabels.utility.trainer.clickBestStreak = loadedTrainerRecords.clickBestStreak or 0
@@ -7149,18 +7188,45 @@ function getCharacterRoot(character)
 	return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
 end
 
+local function getMouseScreenPosition(camera)
+	camera = camera or workspace.CurrentCamera
+	if not camera then
+		return nil
+	end
+
+	local viewport = camera.ViewportSize
+	if not viewport then
+		return nil
+	end
+
+	local mouseLocation = UserInputService:GetMouseLocation()
+	if typeof(mouseLocation) == "Vector2" and mouseLocation.X == mouseLocation.X and mouseLocation.Y == mouseLocation.Y then
+		return Vector2.new(
+			math.clamp(mouseLocation.X, 0, viewport.X),
+			math.clamp(mouseLocation.Y, 0, viewport.Y)
+		)
+	end
+
+	local mouse = LOCAL_PLAYER and LOCAL_PLAYER:GetMouse()
+	if mouse and tonumber(mouse.X) and tonumber(mouse.Y) then
+		return Vector2.new(
+			math.clamp(mouse.X, 0, viewport.X),
+			math.clamp(mouse.Y, 0, viewport.Y)
+		)
+	end
+
+	return Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
+end
+
 local function getTracerOrigin(camera)
 	if CONFIG.tracerOriginMode == "Center" then
 		return Vector2.new(camera.ViewportSize.X * 0.5, camera.ViewportSize.Y * 0.5)
 	end
 
 	if CONFIG.tracerOriginMode == "Crosshair" then
-		local mouseLocation = UserInputService:GetMouseLocation()
-		if mouseLocation then
-			return Vector2.new(
-				math.clamp(mouseLocation.X, 0, camera.ViewportSize.X),
-				math.clamp(mouseLocation.Y, 0, camera.ViewportSize.Y)
-			)
+		local mousePosition = getMouseScreenPosition(camera)
+		if mousePosition then
+			return mousePosition
 		end
 	end
 
@@ -7810,16 +7876,16 @@ local function updateCrosshair()
 		return
 	end
 
-	local mouseLocation = UserInputService:GetMouseLocation()
 	local viewport = camera.ViewportSize
-	if not mouseLocation or not viewport then
+	local mousePosition = getMouseScreenPosition(camera)
+	if not mousePosition or not viewport then
 		hideCrosshair()
 		updateMouseIconVisibility()
 		return
 	end
 
-	local centerX = math.clamp(mouseLocation.X, 0, viewport.X)
-	local centerY = math.clamp(mouseLocation.Y, 0, viewport.Y)
+	local centerX = mousePosition.X
+	local centerY = mousePosition.Y
 	local size = CONFIG.crosshairSize
 	local gap = CONFIG.crosshairGap
 	local color = getCrosshairColor()
@@ -9444,7 +9510,10 @@ function spawnTrainerTarget()
 	if not camera then
 		return
 	end
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	local viewport = camera.ViewportSize
 	local margin = math.max(36, CONFIG.fovRadius * 0.35)
 	local minX = margin
@@ -9462,7 +9531,10 @@ function spawnTrainerTarget()
 end
 
 function recordTrainerClickSuccess(elapsedMs)
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	local shouldSave = false
 	trainer.hits = trainer.hits + 1
 	trainer.clickHits = (trainer.clickHits or 0) + 1
@@ -9487,14 +9559,20 @@ function recordTrainerClickSuccess(elapsedMs)
 end
 
 function recordTrainerClickMiss()
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	trainer.misses = trainer.misses + 1
 	trainer.clickMisses = (trainer.clickMisses or 0) + 1
 	trainer.clickStreak = 0
 end
 
 function recordTrainerTrackSuccess(elapsedMs)
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	local shouldSave = false
 	trainer.hits = trainer.hits + 1
 	trainer.trackHits = (trainer.trackHits or 0) + 1
@@ -9519,13 +9597,19 @@ function recordTrainerTrackSuccess(elapsedMs)
 end
 
 function recordTrainerTrackBreak()
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	trainer.trackBreaks = (trainer.trackBreaks or 0) + 1
 	trainer.trackStreak = 0
 end
 
 function resetTrainerSession()
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	trainer.hits = 0
 	trainer.misses = 0
 	trainer.lastReactionMs = nil
@@ -9546,7 +9630,10 @@ function resetTrainerSession()
 end
 
 function hideTrainerVisuals()
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	for _, key in ipairs({ "targetDot", "hitWindowCircle", "spreadCircle", "recoilMarker" }) do
 		local object = trainer[key]
 		if object then
@@ -9561,7 +9648,10 @@ function hideTrainerVisuals()
 end
 
 function ensureTrainerCircle(key, filled)
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return nil
+	end
 	if not trainer[key] then
 		trainer[key] = createDrawing("Circle")
 		if not trainer[key] then
@@ -9575,7 +9665,10 @@ function ensureTrainerCircle(key, filled)
 end
 
 function ensureTrainerProgressRing()
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return nil
+	end
 	if trainer.trackProgressRing then
 		return trainer.trackProgressRing
 	end
@@ -9622,7 +9715,10 @@ function updateTrainerProgressRing(center, radius, progress)
 end
 
 function buildTrainerChallengeSummary()
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return nil
+	end
 	local clickShots = math.max(1, (trainer.clickHits or 0) + (trainer.clickMisses or 0))
 	local accuracy = math.floor(((trainer.hits or 0) / math.max(1, (trainer.hits or 0) + (trainer.misses or 0))) * 100 + 0.5)
 	return {
@@ -9642,7 +9738,10 @@ function buildTrainerChallengeSummary()
 end
 
 function pushTrainerHistoryEntry(summary)
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		return
+	end
 	if type(summary) ~= "table" then
 		return
 	end
@@ -9905,7 +10004,11 @@ end
 styleTrainerPresetButtons()
 
 function updateTrainerVisuals(deltaTime)
-	local trainer = miniHudLabels.utility.trainer
+	local trainer = ensureTrainerState()
+	if not trainer then
+		hideTrainerVisuals()
+		return
+	end
 	trainer.spreadValue = math.max(0, trainer.spreadValue - (deltaTime * 20))
 	trainer.recoilKick = math.max(0, trainer.recoilKick - (deltaTime * 26))
 	trainer.recoilOffset = trainer.recoilOffset:Lerp(Vector2.zero, math.clamp(deltaTime * 9, 0, 1))
@@ -9915,8 +10018,7 @@ function updateTrainerVisuals(deltaTime)
 		return
 	end
 
-	local mouseLocation = UserInputService:GetMouseLocation()
-	local center = mouseLocation and Vector2.new(mouseLocation.X, mouseLocation.Y) or Vector2.zero
+	local center = getMouseScreenPosition(getCamera()) or Vector2.zero
 
 	if CONFIG.aimTrainerMode then
 		if not trainer.targetPosition then
@@ -9935,7 +10037,11 @@ function updateTrainerVisuals(deltaTime)
 			if nextPosition.Y <= radius + 24 or nextPosition.Y >= viewport.Y - radius then
 				trainer.targetVelocity = Vector2.new(trainer.targetVelocity.X, -trainer.targetVelocity.Y)
 			end
-			trainer.targetVelocity = trainer.targetVelocity.Unit * CONFIG.trainerTargetSpeed
+			if trainer.targetVelocity.Magnitude <= 0.001 then
+				trainer.targetVelocity = Vector2.new(CONFIG.trainerTargetSpeed, 0)
+			else
+				trainer.targetVelocity = trainer.targetVelocity.Unit * CONFIG.trainerTargetSpeed
+			end
 			trainer.targetPosition = trainer.targetPosition + (trainer.targetVelocity * deltaTime)
 		end
 		if targetDot and trainer.targetPosition then
@@ -9962,8 +10068,8 @@ function updateTrainerVisuals(deltaTime)
 			hitWindowCircle.Transparency = 0.75
 		end
 
-		if CONFIG.trainerDrillType == "Track" and trainer.targetPosition and mouseLocation then
-			local hoverPosition = Vector2.new(mouseLocation.X, mouseLocation.Y)
+		if CONFIG.trainerDrillType == "Track" and trainer.targetPosition and center then
+			local hoverPosition = center
 			if (hoverPosition - trainer.targetPosition).Magnitude <= (CONFIG.trainerHitWindow + 2) then
 				trainer.holdProgress = math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress + deltaTime)
 				if trainer.holdProgress >= CONFIG.trainerTrackHoldTime then
@@ -11369,10 +11475,12 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local trainer = miniHudLabels.utility.trainer
-		trainer.spreadValue = math.min(36, trainer.spreadValue + 7)
-		trainer.recoilKick = math.min(18, trainer.recoilKick + 6)
-		trainer.recoilOffset = trainer.recoilOffset + Vector2.new(math.random(-4, 4), -math.random(4, 10))
+		local trainer = ensureTrainerState()
+		if trainer then
+			trainer.spreadValue = math.min(36, trainer.spreadValue + 7)
+			trainer.recoilKick = math.min(18, trainer.recoilKick + 6)
+			trainer.recoilOffset = trainer.recoilOffset + Vector2.new(math.random(-4, 4), -math.random(4, 10))
+		end
 	end
 
 	if CONFIG.clickTeleport and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
@@ -11386,10 +11494,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	end
 
 	if CONFIG.aimTrainerMode and CONFIG.trainerDrillType == "Click" and input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local trainer = miniHudLabels.utility.trainer
-		local mouseLocation = UserInputService:GetMouseLocation()
-		if trainer.targetPosition and mouseLocation then
-			local clickPosition = Vector2.new(mouseLocation.X, mouseLocation.Y)
+		local trainer = ensureTrainerState()
+		local clickPosition = getMouseScreenPosition(getCamera())
+		if trainer and trainer.targetPosition and clickPosition then
 			if (clickPosition - trainer.targetPosition).Magnitude <= CONFIG.trainerHitWindow then
 				if trainer.targetSpawnAt and trainer.targetSpawnAt > 0 then
 					recordTrainerClickSuccess(math.floor((tick() - trainer.targetSpawnAt) * 1000 + 0.5))
@@ -11476,6 +11583,22 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 local updateAccumulator = 0
+local frameTaskErrorCounts = {}
+
+local function runSafeFrameTask(taskName, taskFn, ...)
+	local ok, err = pcall(taskFn, ...)
+	if ok then
+		return true
+	end
+
+	local count = (frameTaskErrorCounts[taskName] or 0) + 1
+	frameTaskErrorCounts[taskName] = count
+	if count <= 3 then
+		warn(string.format("[0xVyrs] %s failed: %s", taskName, tostring(err)))
+	end
+	return false
+end
+
 RunService.RenderStepped:Connect(function(deltaTime)
 	if getgenv().__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
 		return
@@ -11580,17 +11703,17 @@ RunService.RenderStepped:Connect(function(deltaTime)
 	end
 
 	if gui.Enabled then
-		updateCrosshair()
+		runSafeFrameTask("updateCrosshair", updateCrosshair)
 	else
 		hideCrosshair()
 	end
-	updateTrainerVisuals(deltaTime)
-	updateMouseIconVisibility()
-	updatePerfStatsUi()
+	runSafeFrameTask("updateTrainerVisuals", updateTrainerVisuals, deltaTime)
+	runSafeFrameTask("updateMouseIconVisibility", updateMouseIconVisibility)
+	runSafeFrameTask("updatePerfStatsUi", updatePerfStatsUi)
 	updateAccumulator = updateAccumulator + deltaTime
 	if updateAccumulator >= updateInterval then
 		updateAccumulator = 0
-		refreshAllEsp()
+		runSafeFrameTask("refreshAllEsp", refreshAllEsp)
 	end
 end)
 

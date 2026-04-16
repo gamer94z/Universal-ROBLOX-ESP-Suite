@@ -8,17 +8,14 @@
 
 return function(context)
 	local releaseTrack = {
-		latestVersion = "1.4",
-		title = "Cleaner UI + Better Intro",
+		latestVersion = "1.4.1",
+		title = "Stability Fixes + UI Cleanup",
 		notes = {
-			"The intro now matches the main UI style much more closely.",
-			"The menu feels cleaner and easier to read.",
-			"Key pages were grouped better so settings are easier to find.",
-			"Saved configs are easier to manage.",
-			"Tooltips were improved for settings that were hard to understand.",
-			"Floating panels behave more reliably when moved around.",
-			"Preset selection is simpler and easier to use.",
-			"General polish across visuals, controls, and layout.",
+			"Fixed issues that could make the script stop working properly.",
+			"Improved crosshair and mouse-follow behavior.",
+			"Cleaned up the menu so main pages are easier to use.",
+			"Updated the intro and UI styling to feel more consistent.",
+			"Improved overall stability across the main features.",
 		},
 	}
 
