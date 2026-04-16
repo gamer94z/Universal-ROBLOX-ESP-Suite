@@ -267,13 +267,24 @@ local function createDrawing(kind)
 	return object
 end
 
+local function removeDrawingObject(object)
+	if not object then
+		return
+	end
+
+	local removeMethod = object.Remove or object.Destroy
+	if type(removeMethod) == "function" then
+		pcall(removeMethod, object)
+	end
+end
+
 local function supportsDrawing(kind)
 	local object = createDrawing(kind)
 	if not object then
 		return false
 	end
 
-	object:Remove()
+	removeDrawingObject(object)
 	return true
 end
 
@@ -318,6 +329,7 @@ local overlayTools
 local loadConfigSlot
 local deleteConfigSlot
 local getConfigSlotNames
+local playerEspRenderer
 local keybindState = {
 	toggleButtonsByConfig = {},
 }
@@ -984,6 +996,590 @@ return function(context)
 	}
 end
 ]==]
+local UI_FRAMEWORK_MODULE_SOURCE = [==[
+return function(context)
+	local create = context.create
+	local addCorner = context.addCorner
+	local addStroke = context.addStroke
+	local makeLabel = context.makeLabel
+	local TweenService = context.TweenService
+	local theme = context.theme
+	local tabBar = context.tabBar
+	local pagesContainer = context.pagesContainer
+	local colorOptions = context.colorOptions or {}
+
+	local function createPage()
+		local page = create("ScrollingFrame", {
+			Active = true,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			ScrollBarImageColor3 = theme.accent,
+			ScrollBarThickness = 4,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			Size = UDim2.new(1, 0, 1, 0),
+			Visible = false,
+			Parent = pagesContainer,
+		})
+
+		create("UIPadding", {
+			PaddingLeft = UDim.new(0, 12),
+			PaddingRight = UDim.new(0, 12),
+			PaddingTop = UDim.new(0, 10),
+			PaddingBottom = UDim.new(0, 0),
+			Parent = page,
+		})
+
+		create("UIListLayout", {
+			Padding = UDim.new(0, 5),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = page,
+		})
+
+		return page
+	end
+
+	local pages = {
+		control = createPage(),
+		keybinds = createPage(),
+		display = createPage(),
+		combat = createPage(),
+		player = createPage(),
+		performance = createPage(),
+	}
+
+	local tabButtons = {}
+
+	local function createRow(parent, height)
+		local row = create("Frame", {
+			BackgroundColor3 = theme.panel,
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, 0, 0, height or 28),
+			Parent = parent,
+		})
+		addCorner(row, 8)
+		addStroke(row, theme.border, 0.45, 1)
+		return row
+	end
+
+	local function createStatusRow(parent, labelText, valueText)
+		local row = createRow(parent, 24)
+		local label = makeLabel(row, labelText, 11, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(0, 120, 1, 0)
+
+		local value = makeLabel(row, valueText, 11, theme.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		value.AnchorPoint = Vector2.new(1, 0)
+		value.Position = UDim2.new(1, -10, 0, 0)
+		value.Size = UDim2.new(0, 132, 1, 0)
+		return row, value
+	end
+
+	local function createNoteRow(parent, text)
+		local row = createRow(parent, 26)
+		row.BackgroundColor3 = theme.panelAlt
+		local label = makeLabel(row, text, 9, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(1, -20, 1, 0)
+		return row, label
+	end
+
+	local function createPerfRow(parent)
+		local row = createRow(parent, 34)
+
+		local statHolder = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			Size = UDim2.new(1, -18, 1, -8),
+			Parent = row,
+		})
+
+		create("UIGridLayout", {
+			CellPadding = UDim2.new(0, 6, 0, 0),
+			CellSize = UDim2.new(0.25, -5, 1, 0),
+			FillDirectionMaxCells = 4,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = statHolder,
+		})
+
+		local stats = {}
+		for _, item in ipairs({
+			{ key = "fps", title = "FPS" },
+			{ key = "visible", title = "VISIBLE" },
+			{ key = "tracked", title = "TRACKED" },
+			{ key = "update", title = "UPDATE" },
+		}) do
+			local cell = create("Frame", {
+				BackgroundColor3 = theme.panelAlt,
+				BorderSizePixel = 0,
+				Parent = statHolder,
+			})
+			addCorner(cell, 6)
+
+			local title = makeLabel(cell, item.title, 8, theme.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+			title.Position = UDim2.new(0, 0, 0, 2)
+			title.Size = UDim2.new(1, 0, 0, 10)
+
+			local value = makeLabel(cell, "--", 10, theme.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+			value.Position = UDim2.new(0, 0, 0, 12)
+			value.Size = UDim2.new(1, 0, 1, -12)
+
+			stats[item.key] = value
+		end
+
+		return row, stats
+	end
+
+	local function createCycleRow(parent, labelText, valueText)
+		local row = createRow(parent, 30)
+		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(0, 110, 1, 0)
+
+		local valueButton = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0.5, 0),
+			Size = UDim2.new(0, 126, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = valueText,
+			TextColor3 = theme.text,
+			TextSize = 10,
+			Parent = row,
+		})
+		addCorner(valueButton, 4)
+		addStroke(valueButton, theme.border, 0.25, 1)
+		return row, valueButton
+	end
+
+	local function createToggleRow(parent, labelText, defaultState)
+		local row = createRow(parent, 30)
+		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(0, 186, 1, 0)
+
+		local button = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			AutoButtonColor = false,
+			BackgroundColor3 = defaultState and theme.accentSoft or Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0.5, 0),
+			Size = UDim2.new(0, 46, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = defaultState and "ON" or "OFF",
+			TextColor3 = defaultState and Color3.fromRGB(228, 241, 255) or theme.muted,
+			TextSize = 9,
+			Parent = row,
+		})
+		addCorner(button, 999)
+		addStroke(button, theme.accent, defaultState and 0.15 or 0.65, 1)
+		return row, button
+	end
+
+	local function createKeybindRow(parent, labelText, valueText)
+		local row = createRow(parent, 30)
+		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(0, 170, 1, 0)
+
+		local button = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0.5, 0),
+			Size = UDim2.new(0, 72, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = valueText,
+			TextColor3 = theme.text,
+			TextSize = 9,
+			Parent = row,
+		})
+		addCorner(button, 999)
+		addStroke(button, theme.accent, 0.55, 1)
+		return row, button
+	end
+
+	local function createOptionButtonsRow(parent, labelText, options, selectedValue, formatter)
+		local row = createRow(parent, 52)
+
+		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 6)
+		label.Size = UDim2.new(1, -20, 0, 12)
+
+		local holder = create("Frame", {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 10, 0, 24),
+			Size = UDim2.new(1, -20, 0, 20),
+			Parent = row,
+		})
+
+		create("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			Padding = UDim.new(0, 4),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = holder,
+		})
+
+		local buttons = {}
+		for _, option in ipairs(options) do
+			local text = formatter and formatter(option) or tostring(option)
+			local textColor = option == selectedValue and theme.text or theme.muted
+			local button = create("TextButton", {
+				AutoButtonColor = false,
+				BackgroundColor3 = option == selectedValue and theme.accentSoft or Color3.fromRGB(35, 40, 53),
+				BorderSizePixel = 0,
+				Size = UDim2.new(0, math.max(32, 18 + (#text * 6)), 1, 0),
+				Font = Enum.Font.GothamBold,
+				Text = text,
+				TextColor3 = textColor,
+				TextSize = 9,
+				Parent = holder,
+			})
+			addCorner(button, 999)
+			addStroke(button, theme.accent, option == selectedValue and 0.15 or 0.65, 1)
+			table.insert(buttons, {
+				value = option,
+				button = button,
+			})
+		end
+
+		return row, buttons
+	end
+
+	local function setOptionButtonsState(buttonEntries, selectedValue)
+		for _, entry in ipairs(buttonEntries) do
+			local selected = entry.value == selectedValue
+			local backgroundColor = selected and theme.accentSoft or Color3.fromRGB(35, 40, 53)
+			local textColor = selected and theme.text or theme.muted
+			local strokeTransparency = selected and 0.15 or 0.65
+
+			if entry.button:GetAttribute("TrainerPresetButton") then
+				local presetColor = entry.button:GetAttribute("PresetColor")
+				if typeof(presetColor) == "Color3" then
+					backgroundColor = selected and presetColor:Lerp(Color3.fromRGB(255, 255, 255), 0.22) or presetColor:Lerp(Color3.fromRGB(20, 24, 33), 0.7)
+					textColor = selected and theme.text or presetColor
+					strokeTransparency = selected and 0.08 or 0.45
+				end
+			end
+
+			entry.button.BackgroundColor3 = backgroundColor
+			entry.button.TextColor3 = textColor
+
+			if type(entry.value) == "string" then
+				for _, colorOption in ipairs(colorOptions) do
+					if colorOption.name == entry.value then
+						entry.button.TextColor3 = selected and theme.text or colorOption.color
+						break
+					end
+				end
+			end
+
+			local stroke = entry.button:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = strokeTransparency
+			end
+		end
+	end
+
+	local function createSliderRow(parent, labelText, value, minValue, maxValue)
+		local row = createRow(parent, 52)
+
+		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 6)
+		label.Size = UDim2.new(0, 150, 0, 12)
+
+		local valueLabel = create("TextBox", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = Enum.Font.GothamBold,
+			Position = UDim2.new(1, -10, 0, 4),
+			Size = UDim2.new(0, 44, 0, 16),
+			Text = tostring(value),
+			TextColor3 = theme.text,
+			TextSize = 10,
+			Parent = row,
+		})
+		addCorner(valueLabel, 4)
+		addStroke(valueLabel, theme.border, 0.35, 1)
+
+		local bar = create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 10, 0, 28),
+			Size = UDim2.new(1, -20, 0, 12),
+			Text = "",
+			Parent = row,
+		})
+		addCorner(bar, 999)
+		addStroke(bar, theme.border, 0.35, 1)
+
+		local fill = create("Frame", {
+			BackgroundColor3 = theme.accent,
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, 0, 1, 0),
+			Parent = bar,
+		})
+		addCorner(fill, 999)
+
+		local knob = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = theme.text,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.new(0, 10, 0, 10),
+			Parent = bar,
+		})
+		addCorner(knob, 999)
+
+		return {
+			bar = bar,
+			fill = fill,
+			knob = knob,
+			valueLabel = valueLabel,
+			isEditing = false,
+			min = minValue,
+			max = maxValue,
+		}
+	end
+
+	local function applySliderVisual(slider, value)
+		value = tonumber(value) or slider.min or 0
+		local alpha = 0
+		if slider.max > slider.min then
+			alpha = (value - slider.min) / (slider.max - slider.min)
+		end
+		alpha = math.clamp(alpha, 0, 1)
+		slider.fill.Size = UDim2.new(alpha, 0, 1, 0)
+		slider.knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	end
+
+	local function bindSliderValueInput(slider, normalizeValue, commitValue)
+		slider.valueLabel.Focused:Connect(function()
+			slider.isEditing = true
+		end)
+
+		slider.valueLabel:GetPropertyChangedSignal("Text"):Connect(function()
+			if not slider.isEditing then
+				return
+			end
+
+			local typedValue = tonumber(slider.valueLabel.Text)
+			if typedValue == nil then
+				return
+			end
+
+			applySliderVisual(slider, normalizeValue(typedValue))
+		end)
+
+		slider.valueLabel.FocusLost:Connect(function()
+			slider.isEditing = false
+
+			local typedValue = tonumber(slider.valueLabel.Text)
+			if not typedValue then
+				setSliderState(slider, normalizeValue())
+				return
+			end
+
+			local nextValue = normalizeValue(typedValue)
+			commitValue(nextValue)
+			setSliderState(slider, nextValue)
+			task.defer(function()
+				if slider and slider.fill and slider.knob then
+					setSliderState(slider, nextValue)
+				end
+			end)
+		end)
+	end
+
+	local function createSpectateRow(parent)
+		local row = createRow(parent, 30)
+		row.ZIndex = 14
+
+		local label = makeLabel(row, "SPECTATE", 10, theme.muted, Enum.Font.GothamMedium)
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(0, 90, 1, 0)
+		label.ZIndex = 14
+
+		local offButton = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(64, 39, 48),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -10, 0.5, 0),
+			Size = UDim2.new(0, 42, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = "OFF",
+			TextColor3 = theme.text,
+			TextSize = 9,
+			ZIndex = 14,
+			Parent = row,
+		})
+		addCorner(offButton, 4)
+		addStroke(offButton, theme.border, 0.35, 1)
+
+		local mainButton = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -58, 0.5, 0),
+			Size = UDim2.new(0, 120, 0, 20),
+			Font = Enum.Font.GothamBold,
+			Text = "SELECT",
+			TextColor3 = theme.text,
+			TextSize = 9,
+			ZIndex = 14,
+			Parent = row,
+		})
+		addCorner(mainButton, 4)
+		addStroke(mainButton, theme.border, 0.25, 1)
+
+		local list = create("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = Color3.fromRGB(24, 28, 38),
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -58, 1, 6),
+			Size = UDim2.new(0, 154, 0, 176),
+			Visible = false,
+			ZIndex = 20,
+			Parent = row,
+		})
+		addCorner(list, 6)
+		addStroke(list, theme.border, 0.2, 1)
+
+		local searchBox = create("TextBox", {
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = Enum.Font.GothamMedium,
+			PlaceholderColor3 = theme.muted,
+			PlaceholderText = "Search player",
+			Position = UDim2.new(0, 6, 0, 6),
+			Size = UDim2.new(1, -12, 0, 22),
+			Text = "",
+			TextColor3 = theme.text,
+			TextSize = 10,
+			ZIndex = 21,
+			Parent = list,
+		})
+		addCorner(searchBox, 4)
+		addStroke(searchBox, theme.border, 0.35, 1)
+
+		local scroller = create("ScrollingFrame", {
+			Active = true,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			Position = UDim2.new(0, 6, 0, 34),
+			ScrollBarImageColor3 = theme.accent,
+			ScrollBarThickness = 4,
+			Size = UDim2.new(1, -12, 1, -40),
+			ZIndex = 21,
+			Parent = list,
+		})
+
+		create("UIListLayout", {
+			Padding = UDim.new(0, 4),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = scroller,
+		})
+
+		return {
+			main = mainButton,
+			off = offButton,
+			list = list,
+			search = searchBox,
+			scroller = scroller,
+		}
+	end
+
+	local function setSliderState(slider, value)
+		applySliderVisual(slider, value)
+		if not slider.isEditing then
+			slider.valueLabel.Text = tostring(tonumber(value) or slider.min or 0)
+		end
+	end
+
+	local function createTabButton(tabName, labelText)
+		local button = create("TextButton", {
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, 74, 1, 0),
+			Font = Enum.Font.GothamBold,
+			Text = labelText,
+			TextColor3 = theme.muted,
+			TextSize = 10,
+			Parent = tabBar,
+		})
+		addCorner(button, 999)
+		addStroke(button, theme.border, 0.5, 1)
+		tabButtons[tabName] = button
+		return button
+	end
+
+	local function setActiveTab(tabName)
+		for name, page in pairs(pages) do
+			page.Visible = name == tabName
+		end
+
+		for name, button in pairs(tabButtons) do
+			local selected = name == tabName
+			button.BackgroundColor3 = selected and theme.accentSoft or Color3.fromRGB(35, 40, 53)
+			button.TextColor3 = selected and theme.text or theme.muted
+			local stroke = button:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = selected and 0.15 or 0.5
+			end
+		end
+	end
+
+	local function setToggleState(button, state)
+		button.Text = state and "ON" or "OFF"
+		button.TextColor3 = state and Color3.fromRGB(228, 241, 255) or theme.muted
+		button.BackgroundColor3 = state and theme.accentSoft or Color3.fromRGB(35, 40, 53)
+
+		local stroke = button:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Transparency = state and 0.15 or 0.55
+		end
+	end
+
+	return {
+		pages = pages,
+		tabButtons = tabButtons,
+		createNoteRow = createNoteRow,
+		createOptionButtonsRow = createOptionButtonsRow,
+		createPerfRow = createPerfRow,
+		createRow = createRow,
+		createSliderRow = createSliderRow,
+		createSpectateRow = createSpectateRow,
+		createStatusRow = createStatusRow,
+		createTabButton = createTabButton,
+		createToggleRow = createToggleRow,
+		createKeybindRow = createKeybindRow,
+		createCycleRow = createCycleRow,
+		setActiveTab = setActiveTab,
+		setOptionButtonsState = setOptionButtonsState,
+		setSliderState = setSliderState,
+		setToggleState = setToggleState,
+		applySliderVisual = applySliderVisual,
+		bindSliderValueInput = bindSliderValueInput,
+	}
+end
+]==]
 local OVERLAY_TOOLS_MODULE_SOURCE = [==[
 return function(context)
 	local releaseTrack = {
@@ -1257,6 +1853,123 @@ return function(context)
 		makeOverlayDraggable = makeOverlayDraggable,
 		resetOverlayPosition = resetOverlayPosition,
 		updateReleasePanel = updateReleasePanel,
+	}
+end
+]==]
+local PLAYER_ESP_MODULE_SOURCE = [==[
+return function(context)
+	local CONFIG = context.CONFIG
+	local LOCAL_PLAYER = context.LOCAL_PLAYER
+	local THEME = context.THEME
+	local DEV_TAG_DISTANCE = context.DEV_TAG_DISTANCE
+	local getEspEntry = context.getEspEntry
+	local clearEntry = context.clearEntry
+	local shouldTrackPlayer = context.shouldTrackPlayer
+	local getCharacterRoot = context.getCharacterRoot
+	local getEspColor = context.getEspColor
+	local isPlayerVisible = context.isPlayerVisible
+	local getDisplayColor = context.getDisplayColor
+	local getDistanceFade = context.getDistanceFade
+	local isFocusedTarget = context.isFocusedTarget
+	local isDevPlayer = context.isDevPlayer
+	local getRainbowColor = context.getRainbowColor
+	local getTargetThreatData = context.getTargetThreatData
+	local getTracerColor = context.getTracerColor
+	local getCamera = context.getCamera
+	local getEffectiveBoxMode = context.getEffectiveBoxMode
+	local ensureHighlight = context.ensureHighlight
+	local updateBoxEsp = context.updateBoxEsp
+	local updateSkeletonEsp = context.updateSkeletonEsp
+	local updateLookDirectionEsp = context.updateLookDirectionEsp
+	local updateBillboardEsp = context.updateBillboardEsp
+	local updateTracerEsp = context.updateTracerEsp
+	local updateHeadDotEsp = context.updateHeadDotEsp
+
+	local function updatePlayerEsp(player, precomputed)
+		local entry = getEspEntry(player)
+
+		if not CONFIG.enabled or not shouldTrackPlayer(player) then
+			clearEntry(entry)
+			return
+		end
+
+		local character = player.Character
+		local root = character and getCharacterRoot(character)
+		local localCharacter = LOCAL_PLAYER.Character
+		local localRoot = localCharacter and getCharacterRoot(localCharacter)
+
+		if not character or not root or not localRoot then
+			clearEntry(entry)
+			return
+		end
+
+		local distance = precomputed and precomputed.distance or (root.Position - localRoot.Position).Magnitude
+		if distance > CONFIG.maxDistance then
+			clearEntry(entry)
+			return
+		end
+
+		local espColor = getEspColor(player)
+		local visible = precomputed and precomputed.visible
+		if visible == nil then
+			visible = isPlayerVisible(character, root)
+		end
+		local displayColor = getDisplayColor(espColor, visible)
+		local distanceFade = getDistanceFade(distance)
+		local focusTarget = isFocusedTarget(player)
+		local showDevTag = isDevPlayer(player) and distance <= DEV_TAG_DISTANCE
+		local devRainbowColor = showDevTag and getRainbowColor() or nil
+		local telemetry = precomputed and precomputed.telemetry or getTargetThreatData(player, character, root, localRoot, visible)
+		local tracerColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player)))
+		local camera = getCamera()
+		local effectiveBoxMode = getEffectiveBoxMode()
+		local outlineColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or espColor))
+		local fillColor = showDevTag and devRainbowColor or espColor
+
+		local highlight = ensureHighlight(entry, character)
+		highlight.FillColor = fillColor
+		if showDevTag then
+			local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
+			highlight.FillTransparency = 0.44 - (pulse * 0.14)
+			highlight.OutlineTransparency = 0.02 + (pulse * 0.08)
+		else
+			if effectiveBoxMode == "Chams" then
+				highlight.FillTransparency = math.clamp(CONFIG.fillTransparency + ((1 - distanceFade) * 0.45), 0, 1)
+				highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + ((1 - distanceFade) * 0.35), 0, 1)
+			elseif effectiveBoxMode == "Flat Chams" then
+				highlight.FillTransparency = math.clamp(math.max(0.05, CONFIG.fillTransparency * 0.65) + ((1 - distanceFade) * 0.3), 0, 1)
+				highlight.OutlineTransparency = 1
+			elseif effectiveBoxMode == "Outline Chams" then
+				highlight.FillTransparency = 1
+				highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + ((1 - distanceFade) * 0.18), 0, 1)
+			elseif effectiveBoxMode == "Split Chams" then
+				if visible then
+					highlight.FillTransparency = math.clamp(CONFIG.fillTransparency + 0.18 + ((1 - distanceFade) * 0.24), 0, 1)
+					highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency * 0.55, 0, 1)
+				else
+					highlight.FillTransparency = math.clamp(math.max(0.08, CONFIG.fillTransparency * 0.72), 0, 1)
+					highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + 0.22 + ((1 - distanceFade) * 0.18), 0, 1)
+				end
+			else
+				highlight.FillTransparency = 1
+				highlight.OutlineTransparency = 1
+			end
+		end
+		highlight.OutlineColor = outlineColor
+
+		if camera then
+			updateBoxEsp(entry, camera, character, outlineColor, fillColor)
+			updateSkeletonEsp(entry, camera, character, outlineColor)
+			updateLookDirectionEsp(entry, camera, character, root, outlineColor)
+		end
+
+		updateBillboardEsp(entry, player, character, distance, focusTarget, showDevTag, devRainbowColor, espColor, distanceFade)
+		updateTracerEsp(entry, root, camera, tracerColor, focusTarget, distance, distanceFade)
+		updateHeadDotEsp(entry, character, camera, distanceFade, outlineColor, showDevTag, devRainbowColor)
+	end
+
+	return {
+		updatePlayerEsp = updatePlayerEsp,
 	}
 end
 ]==]
@@ -4320,60 +5033,42 @@ local pagesContainer = create("Frame", {
 	Parent = content,
 })
 
-local function createPage()
-	local page = create("ScrollingFrame", {
-		Active = true,
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		CanvasSize = UDim2.new(0, 0, 0, 0),
-		ScrollBarImageColor3 = THEME.accent,
-		ScrollBarThickness = 4,
-		ScrollingDirection = Enum.ScrollingDirection.Y,
-		Size = UDim2.new(1, 0, 1, 0),
-		Visible = false,
-		Parent = pagesContainer,
-	})
+local uiFrameworkFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\ui_framework.lua", UI_FRAMEWORK_MODULE_SOURCE)
+local uiFramework = type(uiFrameworkFactory) == "function" and uiFrameworkFactory({
+	create = create,
+	addCorner = addCorner,
+	addStroke = addStroke,
+	makeLabel = makeLabel,
+	TweenService = TweenService,
+	theme = THEME,
+	colorOptions = CROSSHAIR_COLOR_OPTIONS,
+	tabBar = tabBar,
+	pagesContainer = pagesContainer,
+}) or nil
 
-	create("UIPadding", {
-		PaddingLeft = UDim.new(0, 12),
-		PaddingRight = UDim.new(0, 12),
-		PaddingTop = UDim.new(0, 10),
-		PaddingBottom = UDim.new(0, 0),
-		Parent = page,
-	})
-
-	create("UIListLayout", {
-		Padding = UDim.new(0, 5),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = page,
-	})
-
-	return page
+if not uiFramework then
+	error("Failed to load ui framework module")
 end
 
-local pages = {
-	control = createPage(),
-	keybinds = createPage(),
-	display = createPage(),
-	combat = createPage(),
-	player = createPage(),
-	performance = createPage(),
-}
-
-local tabButtons = {}
-
-local function createRow(parent, height)
-	local row = create("Frame", {
-		BackgroundColor3 = THEME.panel,
-		BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 0, height or 28),
-		Parent = parent,
-	})
-	addCorner(row, 8)
-	addStroke(row, THEME.border, 0.45, 1)
-	return row
-end
+pages = uiFramework.pages
+tabButtons = uiFramework.tabButtons
+createNoteRow = uiFramework.createNoteRow
+createOptionButtonsRow = uiFramework.createOptionButtonsRow
+createPerfRow = uiFramework.createPerfRow
+createRow = uiFramework.createRow
+createSliderRow = uiFramework.createSliderRow
+createSpectateRow = uiFramework.createSpectateRow
+createStatusRow = uiFramework.createStatusRow
+createTabButton = uiFramework.createTabButton
+createToggleRow = uiFramework.createToggleRow
+createKeybindRow = uiFramework.createKeybindRow
+createCycleRow = uiFramework.createCycleRow
+setActiveTab = uiFramework.setActiveTab
+setOptionButtonsState = uiFramework.setOptionButtonsState
+setSliderState = uiFramework.setSliderState
+setToggleState = uiFramework.setToggleState
+applySliderVisual = uiFramework.applySliderVisual
+bindSliderValueInput = uiFramework.bindSliderValueInput
 
 do
 	local overlayFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\overlay_tools.lua", OVERLAY_TOOLS_MODULE_SOURCE)
@@ -4394,77 +5089,6 @@ do
 		})
 		overlayTools.makeOverlayDraggable(miniHud, "miniHud")
 	end
-end
-
-local function createStatusRow(parent, labelText, valueText)
-	local row = createRow(parent, 24)
-	local label = makeLabel(row, labelText, 11, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 0)
-	label.Size = UDim2.new(0, 120, 1, 0)
-
-	local value = makeLabel(row, valueText, 11, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-	value.AnchorPoint = Vector2.new(1, 0)
-	value.Position = UDim2.new(1, -10, 0, 0)
-	value.Size = UDim2.new(0, 132, 1, 0)
-	return row, value
-end
-
-function createNoteRow(parent, text)
-	local row = createRow(parent, 26)
-	row.BackgroundColor3 = THEME.panelAlt
-	local label = makeLabel(row, text, 9, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 0)
-	label.Size = UDim2.new(1, -20, 1, 0)
-	return row, label
-end
-
-local function createPerfRow(parent)
-	local row = createRow(parent, 34)
-
-	local statHolder = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(1, -18, 1, -8),
-		Parent = row,
-	})
-
-	create("UIGridLayout", {
-		CellPadding = UDim2.new(0, 6, 0, 0),
-		CellSize = UDim2.new(0.25, -5, 1, 0),
-		FillDirectionMaxCells = 4,
-		HorizontalAlignment = Enum.HorizontalAlignment.Center,
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = statHolder,
-	})
-
-	local stats = {}
-	for _, item in ipairs({
-		{ key = "fps", title = "FPS" },
-		{ key = "visible", title = "VISIBLE" },
-		{ key = "tracked", title = "TRACKED" },
-		{ key = "update", title = "UPDATE" },
-	}) do
-		local cell = create("Frame", {
-			BackgroundColor3 = THEME.panelAlt,
-			BorderSizePixel = 0,
-			Parent = statHolder,
-		})
-		addCorner(cell, 6)
-
-		local title = makeLabel(cell, item.title, 8, THEME.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-		title.Position = UDim2.new(0, 0, 0, 2)
-		title.Size = UDim2.new(1, 0, 0, 10)
-
-		local value = makeLabel(cell, "--", 10, THEME.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-		value.Position = UDim2.new(0, 0, 0, 12)
-		value.Size = UDim2.new(1, 0, 1, -12)
-
-		stats[item.key] = value
-	end
-
-	return row, stats
 end
 
 function createTrainerCardsRow(parent)
@@ -4612,30 +5236,6 @@ function createTrainerHistoryRow(parent)
 	}
 end
 
-local function createCycleRow(parent, labelText, valueText)
-	local row = createRow(parent, 30)
-	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 0)
-	label.Size = UDim2.new(0, 110, 1, 0)
-
-	local valueButton = create("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5),
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		Position = UDim2.new(1, -10, 0.5, 0),
-		Size = UDim2.new(0, 126, 0, 20),
-		Font = Enum.Font.GothamBold,
-		Text = valueText,
-		TextColor3 = THEME.text,
-		TextSize = 10,
-		Parent = row,
-	})
-	addCorner(valueButton, 4)
-	addStroke(valueButton, THEME.border, 0.25, 1)
-	return row, valueButton
-end
-
 function createPresetDropdownRow(parent)
 	local row = createRow(parent, 30)
 	local closedHeight = 30
@@ -4731,414 +5331,6 @@ function createPresetDropdownRow(parent)
 		openHeight = openHeight,
 		open = false,
 	}
-end
-
-local function createToggleRow(parent, labelText, defaultState)
-	local row = createRow(parent, 30)
-	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 0)
-	label.Size = UDim2.new(0, 186, 1, 0)
-
-	local button = create("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5),
-		AutoButtonColor = false,
-		BackgroundColor3 = defaultState and THEME.accentSoft or Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		Position = UDim2.new(1, -10, 0.5, 0),
-		Size = UDim2.new(0, 46, 0, 20),
-		Font = Enum.Font.GothamBold,
-		Text = defaultState and "ON" or "OFF",
-		TextColor3 = defaultState and Color3.fromRGB(228, 241, 255) or THEME.muted,
-		TextSize = 9,
-		Parent = row,
-	})
-	addCorner(button, 999)
-	addStroke(button, THEME.accent, defaultState and 0.15 or 0.65, 1)
-	return row, button
-end
-
-local function createKeybindRow(parent, labelText, valueText)
-	local row = createRow(parent, 30)
-	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 0)
-	label.Size = UDim2.new(0, 170, 1, 0)
-
-	local button = create("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5),
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		Position = UDim2.new(1, -10, 0.5, 0),
-		Size = UDim2.new(0, 72, 0, 20),
-		Font = Enum.Font.GothamBold,
-		Text = valueText,
-		TextColor3 = THEME.text,
-		TextSize = 9,
-		Parent = row,
-	})
-	addCorner(button, 999)
-	addStroke(button, THEME.accent, 0.55, 1)
-	return row, button
-end
-
-local function createOptionButtonsRow(parent, labelText, options, selectedValue, formatter)
-	local row = createRow(parent, 52)
-
-	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 6)
-	label.Size = UDim2.new(1, -20, 0, 12)
-
-	local holder = create("Frame", {
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0, 10, 0, 24),
-		Size = UDim2.new(1, -20, 0, 20),
-		Parent = row,
-	})
-
-	create("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		Padding = UDim.new(0, 4),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = holder,
-	})
-
-	local buttons = {}
-	for _, option in ipairs(options) do
-		local text = formatter and formatter(option) or tostring(option)
-		local textColor = option == selectedValue and THEME.text or THEME.muted
-		if labelText == "CROSSHAIR COLOR" then
-			for _, colorOption in ipairs(CROSSHAIR_COLOR_OPTIONS) do
-				if colorOption.name == option then
-					textColor = colorOption.color
-					break
-				end
-			end
-		end
-
-		local button = create("TextButton", {
-			AutoButtonColor = false,
-			BackgroundColor3 = option == selectedValue and THEME.accentSoft or Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Size = UDim2.new(0, math.max(32, 18 + (#text * 6)), 1, 0),
-			Font = Enum.Font.GothamBold,
-			Text = text,
-			TextColor3 = textColor,
-			TextSize = 9,
-			Parent = holder,
-		})
-		addCorner(button, 999)
-		addStroke(button, THEME.accent, option == selectedValue and 0.15 or 0.65, 1)
-		table.insert(buttons, {
-			value = option,
-			button = button,
-		})
-	end
-
-	return row, buttons
-end
-
-local function setOptionButtonsState(buttonEntries, selectedValue)
-	for _, entry in ipairs(buttonEntries) do
-		local selected = entry.value == selectedValue
-		local backgroundColor = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
-		local textColor = selected and THEME.text or THEME.muted
-		local strokeTransparency = selected and 0.15 or 0.65
-
-		if entry.button:GetAttribute("TrainerPresetButton") then
-			local presetColor = entry.button:GetAttribute("PresetColor")
-			if typeof(presetColor) == "Color3" then
-				backgroundColor = selected and presetColor:Lerp(Color3.fromRGB(255, 255, 255), 0.22) or presetColor:Lerp(Color3.fromRGB(20, 24, 33), 0.7)
-				textColor = selected and THEME.text or presetColor
-				strokeTransparency = selected and 0.08 or 0.45
-			end
-		end
-
-		entry.button.BackgroundColor3 = backgroundColor
-		entry.button.TextColor3 = textColor
-
-		if type(entry.value) == "string" then
-			for _, colorOption in ipairs(CROSSHAIR_COLOR_OPTIONS) do
-				if colorOption.name == entry.value then
-					entry.button.TextColor3 = selected and THEME.text or colorOption.color
-					break
-				end
-			end
-		end
-
-		local stroke = entry.button:FindFirstChildOfClass("UIStroke")
-		if stroke then
-			stroke.Transparency = strokeTransparency
-		end
-	end
-end
-
-local function createSliderRow(parent, labelText, value, minValue, maxValue)
-	local row = createRow(parent, 52)
-
-	local label = makeLabel(row, labelText, 10, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 6)
-	label.Size = UDim2.new(0, 150, 0, 12)
-
-	local valueLabel = create("TextBox", {
-		AnchorPoint = Vector2.new(1, 0),
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		ClearTextOnFocus = false,
-		Font = Enum.Font.GothamBold,
-		Position = UDim2.new(1, -10, 0, 4),
-		Size = UDim2.new(0, 44, 0, 16),
-		Text = tostring(value),
-		TextColor3 = THEME.text,
-		TextSize = 10,
-		Parent = row,
-	})
-	addCorner(valueLabel, 4)
-	addStroke(valueLabel, THEME.border, 0.35, 1)
-
-	local bar = create("TextButton", {
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		Position = UDim2.new(0, 10, 0, 28),
-		Size = UDim2.new(1, -20, 0, 12),
-		Text = "",
-		Parent = row,
-	})
-	addCorner(bar, 999)
-	addStroke(bar, THEME.border, 0.35, 1)
-
-	local fill = create("Frame", {
-		BackgroundColor3 = THEME.accent,
-		BorderSizePixel = 0,
-		Size = UDim2.new(0, 0, 1, 0),
-		Parent = bar,
-	})
-	addCorner(fill, 999)
-
-	local knob = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = THEME.text,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.new(0, 10, 0, 10),
-		Parent = bar,
-	})
-	addCorner(knob, 999)
-
-	return {
-		bar = bar,
-		fill = fill,
-		knob = knob,
-		valueLabel = valueLabel,
-		isEditing = false,
-		min = minValue,
-		max = maxValue,
-	}
-end
-
-local function applySliderVisual(slider, value)
-	value = tonumber(value) or slider.min or 0
-	local alpha = 0
-	if slider.max > slider.min then
-		alpha = (value - slider.min) / (slider.max - slider.min)
-	end
-	alpha = math.clamp(alpha, 0, 1)
-	slider.fill.Size = UDim2.new(alpha, 0, 1, 0)
-	slider.knob.Position = UDim2.new(alpha, 0, 0.5, 0)
-end
-
-local function bindSliderValueInput(slider, normalizeValue, commitValue)
-	slider.valueLabel.Focused:Connect(function()
-		slider.isEditing = true
-	end)
-
-	slider.valueLabel:GetPropertyChangedSignal("Text"):Connect(function()
-		if not slider.isEditing then
-			return
-		end
-
-		local typedValue = tonumber(slider.valueLabel.Text)
-		if typedValue == nil then
-			return
-		end
-
-		applySliderVisual(slider, normalizeValue(typedValue))
-	end)
-
-	slider.valueLabel.FocusLost:Connect(function()
-		slider.isEditing = false
-
-		local typedValue = tonumber(slider.valueLabel.Text)
-		if not typedValue then
-			setSliderState(slider, normalizeValue())
-			return
-		end
-
-		local nextValue = normalizeValue(typedValue)
-		commitValue(nextValue)
-		setSliderState(slider, nextValue)
-		task.defer(function()
-			if slider and slider.fill and slider.knob then
-				setSliderState(slider, nextValue)
-			end
-		end)
-	end)
-end
-
-local function createSpectateRow(parent)
-	local row = createRow(parent, 30)
-	row.ZIndex = 14
-
-	local label = makeLabel(row, "SPECTATE", 10, THEME.muted, Enum.Font.GothamMedium)
-	label.Position = UDim2.new(0, 10, 0, 0)
-	label.Size = UDim2.new(0, 90, 1, 0)
-	label.ZIndex = 14
-
-	local offButton = create("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5),
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(64, 39, 48),
-		BorderSizePixel = 0,
-		Position = UDim2.new(1, -10, 0.5, 0),
-		Size = UDim2.new(0, 42, 0, 20),
-		Font = Enum.Font.GothamBold,
-		Text = "OFF",
-		TextColor3 = THEME.text,
-		TextSize = 9,
-		ZIndex = 14,
-		Parent = row,
-	})
-	addCorner(offButton, 4)
-	addStroke(offButton, THEME.border, 0.35, 1)
-
-	local mainButton = create("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5),
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		Position = UDim2.new(1, -58, 0.5, 0),
-		Size = UDim2.new(0, 120, 0, 20),
-		Font = Enum.Font.GothamBold,
-		Text = "SELECT",
-		TextColor3 = THEME.text,
-		TextSize = 9,
-		ZIndex = 14,
-		Parent = row,
-	})
-	addCorner(mainButton, 4)
-	addStroke(mainButton, THEME.border, 0.25, 1)
-
-	local list = create("Frame", {
-		AnchorPoint = Vector2.new(1, 0),
-		BackgroundColor3 = Color3.fromRGB(24, 28, 38),
-		BorderSizePixel = 0,
-		Position = UDim2.new(1, -58, 1, 6),
-		Size = UDim2.new(0, 154, 0, 176),
-		Visible = false,
-		ZIndex = 20,
-		Parent = row,
-	})
-	addCorner(list, 6)
-	addStroke(list, THEME.border, 0.2, 1)
-
-	local searchBox = create("TextBox", {
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		ClearTextOnFocus = false,
-		Font = Enum.Font.GothamMedium,
-		PlaceholderColor3 = THEME.muted,
-		PlaceholderText = "Search player",
-		Position = UDim2.new(0, 6, 0, 6),
-		Size = UDim2.new(1, -12, 0, 22),
-		Text = "",
-		TextColor3 = THEME.text,
-		TextSize = 10,
-		ZIndex = 21,
-		Parent = list,
-	})
-	addCorner(searchBox, 4)
-	addStroke(searchBox, THEME.border, 0.35, 1)
-
-	local scroller = create("ScrollingFrame", {
-		Active = true,
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		CanvasSize = UDim2.new(0, 0, 0, 0),
-		Position = UDim2.new(0, 6, 0, 34),
-		ScrollBarImageColor3 = THEME.accent,
-		ScrollBarThickness = 4,
-		Size = UDim2.new(1, -12, 1, -40),
-		ZIndex = 21,
-		Parent = list,
-	})
-
-	create("UIListLayout", {
-		Padding = UDim.new(0, 4),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = scroller,
-	})
-
-	return {
-		main = mainButton,
-		off = offButton,
-		list = list,
-		search = searchBox,
-		scroller = scroller,
-	}
-end
-
-local function setSliderState(slider, value)
-	applySliderVisual(slider, value)
-	if not slider.isEditing then
-		slider.valueLabel.Text = tostring(tonumber(value) or slider.min or 0)
-	end
-end
-
-local function createTabButton(tabName, labelText)
-	local button = create("TextButton", {
-		AutoButtonColor = false,
-		BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-		BorderSizePixel = 0,
-		Size = UDim2.new(0, 74, 1, 0),
-		Font = Enum.Font.GothamBold,
-		Text = labelText,
-		TextColor3 = THEME.muted,
-		TextSize = 10,
-		Parent = tabBar,
-	})
-	addCorner(button, 999)
-	addStroke(button, THEME.border, 0.5, 1)
-	tabButtons[tabName] = button
-	return button
-end
-
-local function setActiveTab(tabName)
-	for name, page in pairs(pages) do
-		page.Visible = name == tabName
-	end
-
-	for name, button in pairs(tabButtons) do
-		local selected = name == tabName
-		button.BackgroundColor3 = selected and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
-		button.TextColor3 = selected and THEME.text or THEME.muted
-		local stroke = button:FindFirstChildOfClass("UIStroke")
-		if stroke then
-			stroke.Transparency = selected and 0.15 or 0.5
-		end
-	end
-end
-
-local function setToggleState(button, state)
-	button.Text = state and "ON" or "OFF"
-	button.TextColor3 = state and Color3.fromRGB(228, 241, 255) or THEME.muted
-	button.BackgroundColor3 = state and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
-
-	local stroke = button:FindFirstChildOfClass("UIStroke")
-	if stroke then
-		stroke.Transparency = state and 0.15 or 0.55
-	end
 end
 
 function createSubTabGroup(parent, tabState, items, defaultKey)
@@ -7394,32 +7586,32 @@ local function clearEntry(entry)
 
 	if entry.tracer then
 		entry.tracer.Visible = false
-		entry.tracer:Remove()
+		removeDrawingObject(entry.tracer)
 		entry.tracer = nil
 	end
 
 	if entry.tracerBranch then
 		entry.tracerBranch.Visible = false
-		entry.tracerBranch:Remove()
+		removeDrawingObject(entry.tracerBranch)
 		entry.tracerBranch = nil
 	end
 
 	if entry.headDot then
 		entry.headDot.Visible = false
-		entry.headDot:Remove()
+		removeDrawingObject(entry.headDot)
 		entry.headDot = nil
 	end
 
 	if entry.box then
 		entry.box.Visible = false
-		entry.box:Remove()
+		removeDrawingObject(entry.box)
 		entry.box = nil
 	end
 
 	if entry.cornerLines then
 		for _, line in ipairs(entry.cornerLines) do
 			line.Visible = false
-			line:Remove()
+			removeDrawingObject(line)
 		end
 		entry.cornerLines = nil
 	end
@@ -7427,7 +7619,7 @@ local function clearEntry(entry)
 	if entry.healthBoxLines then
 		for _, line in ipairs(entry.healthBoxLines) do
 			line.Visible = false
-			line:Remove()
+			removeDrawingObject(line)
 		end
 		entry.healthBoxLines = nil
 	end
@@ -7435,7 +7627,7 @@ local function clearEntry(entry)
 	if entry.box3DLines then
 		for _, line in ipairs(entry.box3DLines) do
 			line.Visible = false
-			line:Remove()
+			removeDrawingObject(line)
 		end
 		entry.box3DLines = nil
 	end
@@ -7443,7 +7635,7 @@ local function clearEntry(entry)
 	if entry.box3DCornerLines then
 		for _, line in ipairs(entry.box3DCornerLines) do
 			line.Visible = false
-			line:Remove()
+			removeDrawingObject(line)
 		end
 		entry.box3DCornerLines = nil
 	end
@@ -7451,7 +7643,7 @@ local function clearEntry(entry)
 	if entry.skeletonLines then
 		for _, line in ipairs(entry.skeletonLines) do
 			line.Visible = false
-			line:Remove()
+			removeDrawingObject(line)
 		end
 		entry.skeletonLines = nil
 	end
@@ -7459,7 +7651,7 @@ local function clearEntry(entry)
 	if entry.lookArrowLines then
 		for _, line in ipairs(entry.lookArrowLines) do
 			line.Visible = false
-			line:Remove()
+			removeDrawingObject(line)
 		end
 		entry.lookArrowLines = nil
 	end
@@ -7650,7 +7842,7 @@ function ensureHealthLines(entry)
 
 		if #entry.healthBoxLines ~= 2 then
 			for _, line in ipairs(entry.healthBoxLines) do
-				line:Remove()
+				removeDrawingObject(line)
 			end
 			entry.healthBoxLines = nil
 			return nil
@@ -7678,7 +7870,7 @@ local function ensureCornerLines(entry)
 
 		if #entry.cornerLines ~= 8 then
 			for _, line in ipairs(entry.cornerLines) do
-				line:Remove()
+				removeDrawingObject(line)
 			end
 			entry.cornerLines = nil
 			return nil
@@ -7706,7 +7898,7 @@ function ensureBoxLines(entry, key, count)
 
 		if #entry[key] ~= count then
 			for _, line in ipairs(entry[key]) do
-				line:Remove()
+				removeDrawingObject(line)
 			end
 			entry[key] = nil
 			return nil
@@ -7734,7 +7926,7 @@ local function ensureSkeletonLines(entry)
 
 		if #entry.skeletonLines ~= #SKELETON_CONNECTIONS then
 			for _, line in ipairs(entry.skeletonLines) do
-				line:Remove()
+				removeDrawingObject(line)
 			end
 			entry.skeletonLines = nil
 			return nil
@@ -7762,7 +7954,7 @@ local function ensureLookArrowLines(entry)
 
 		if #entry.lookArrowLines ~= 3 then
 			for _, line in ipairs(entry.lookArrowLines) do
-				line:Remove()
+				removeDrawingObject(line)
 			end
 			entry.lookArrowLines = nil
 			return nil
@@ -7785,7 +7977,7 @@ local function ensureCrosshairObjects()
 		if not crosshairObjects.horizontal or not crosshairObjects.vertical or not crosshairObjects.dot then
 			for _, object in pairs(crosshairObjects) do
 				if object then
-					object:Remove()
+					removeDrawingObject(object)
 				end
 			end
 			crosshairObjects = {}
@@ -7826,7 +8018,7 @@ local function clearCrosshairObjects()
 	for key, object in pairs(crosshairObjects) do
 		if object then
 			object.Visible = false
-			object:Remove()
+			removeDrawingObject(object)
 		end
 		crosshairObjects[key] = nil
 	end
@@ -8448,140 +8640,8 @@ local function hideDevAura(entry)
 	end
 end
 
-local function updatePlayerEsp(player, precomputed)
-	local entry = getEspEntry(player)
-
-	if not CONFIG.enabled or not shouldTrackPlayer(player) then
-		clearEntry(entry)
-		return
-	end
-
-	local character = player.Character
-	local root = character and getCharacterRoot(character)
-	local localCharacter = LOCAL_PLAYER.Character
-	local localRoot = localCharacter and getCharacterRoot(localCharacter)
-
-	if not character or not root or not localRoot then
-		clearEntry(entry)
-		return
-	end
-
-	local distance = precomputed and precomputed.distance or (root.Position - localRoot.Position).Magnitude
-	if distance > CONFIG.maxDistance then
-		clearEntry(entry)
-		return
-	end
-
-	local espColor = getEspColor(player)
-	local visible = precomputed and precomputed.visible
-	if visible == nil then
-		visible = isPlayerVisible(character, root)
-	end
-	local displayColor = getDisplayColor(espColor, visible)
-	local distanceFade = getDistanceFade(distance)
-	local focusTarget = isFocusedTarget(player)
-	local showDevTag = isDevPlayer(player) and distance <= DEV_TAG_DISTANCE
-	local devRainbowColor = showDevTag and getRainbowColor() or nil
-	local telemetry = precomputed and precomputed.telemetry or getTargetThreatData(player, character, root, localRoot, visible)
-	local tracerColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player)))
-	local camera = getCamera()
-	local effectiveBoxMode = getEffectiveBoxMode()
-	local outlineColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or espColor))
-	local fillColor = showDevTag and devRainbowColor or espColor
-
-	local highlight = ensureHighlight(entry, character)
-	highlight.FillColor = fillColor
-	if showDevTag then
-		local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
-		highlight.FillTransparency = 0.44 - (pulse * 0.14)
-		highlight.OutlineTransparency = 0.02 + (pulse * 0.08)
-	else
-		if effectiveBoxMode == "Chams" then
-			highlight.FillTransparency = math.clamp(CONFIG.fillTransparency + ((1 - distanceFade) * 0.45), 0, 1)
-			highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + ((1 - distanceFade) * 0.35), 0, 1)
-		elseif effectiveBoxMode == "Flat Chams" then
-			highlight.FillTransparency = math.clamp(math.max(0.05, CONFIG.fillTransparency * 0.65) + ((1 - distanceFade) * 0.3), 0, 1)
-			highlight.OutlineTransparency = 1
-		elseif effectiveBoxMode == "Outline Chams" then
-			highlight.FillTransparency = 1
-			highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + ((1 - distanceFade) * 0.18), 0, 1)
-		elseif effectiveBoxMode == "Split Chams" then
-			if visible then
-				highlight.FillTransparency = math.clamp(CONFIG.fillTransparency + 0.18 + ((1 - distanceFade) * 0.24), 0, 1)
-				highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency * 0.55, 0, 1)
-			else
-				highlight.FillTransparency = math.clamp(math.max(0.08, CONFIG.fillTransparency * 0.72), 0, 1)
-				highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + 0.22 + ((1 - distanceFade) * 0.18), 0, 1)
-			end
-		else
-			highlight.FillTransparency = 1
-			highlight.OutlineTransparency = 1
-		end
-	end
-	highlight.OutlineColor = outlineColor
-
-	if camera then
-		updateBoxEsp(entry, camera, character, outlineColor, fillColor)
-		updateSkeletonEsp(entry, camera, character, outlineColor)
-		updateLookDirectionEsp(entry, camera, character, root, outlineColor)
-	end
-
-	if CONFIG.showNames or CONFIG.showDistance or CONFIG.showHealth or showDevTag then
-		local _, title = ensureBillboard(entry, character)
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		local labelParts = {}
-
-		if showDevTag then
-			table.insert(labelParts, DEV_TAG_TEXT)
-		elseif CONFIG.showNames then
-			table.insert(labelParts, player.Name)
-		end
-
-		if not showDevTag and CONFIG.showDistance then
-			table.insert(labelParts, string.format("[%dm]", distance))
-		end
-
-		if not showDevTag and CONFIG.showHealth and humanoid then
-			table.insert(labelParts, string.format("[%d HP]", math.max(0, math.floor(humanoid.Health))))
-		end
-
-		if not showDevTag and CONFIG.showWeapon then
-			local heldTool = getHeldToolName(character)
-			if heldTool then
-				table.insert(labelParts, "[" .. heldTool .. "]")
-			end
-		end
-
-		local labelText = table.concat(labelParts, CONFIG.textStackMode == "Stacked" and "\n" or " ")
-		title.Text = focusTarget and ("[TARGET] " .. labelText) or labelText
-		if showDevTag then
-			title.TextColor3 = devRainbowColor
-			title.TextTransparency = 0
-			updateDevAura(entry, character, devRainbowColor)
-		else
-			title.TextColor3 = focusTarget and THEME.focus or espColor
-			title.TextTransparency = math.clamp((1 - distanceFade) * 0.65, 0, 0.65)
-			hideDevAura(entry)
-		end
-		entry.billboard.Size = CONFIG.textStackMode == "Stacked" and UDim2.new(0, 180, 0, 42) or UDim2.new(0, 180, 0, 30)
-
-		if entry.healthBack and entry.healthFill and humanoid then
-			local healthPercent = 0
-			if humanoid.MaxHealth > 0 then
-				healthPercent = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
-			end
-
-			entry.healthBack.Visible = CONFIG.showHealth
-			entry.healthFill.Size = UDim2.new(healthPercent, 0, 1, 0)
-			entry.healthFill.BackgroundColor3 = showDevTag and devRainbowColor or (focusTarget and THEME.focus or Color3.fromRGB(
-				math.floor(255 - (155 * healthPercent)),
-				math.floor(70 + (185 * healthPercent)),
-				math.floor(88 - (32 * healthPercent))
-			))
-		elseif entry.healthBack then
-			entry.healthBack.Visible = false
-		end
-	else
+local function updateBillboardEsp(entry, player, character, distance, focusTarget, showDevTag, devRainbowColor, espColor, distanceFade)
+	if not (CONFIG.showNames or CONFIG.showDistance or CONFIG.showHealth or showDevTag) then
 		if entry.billboard then
 			entry.billboard:Destroy()
 			entry.billboard = nil
@@ -8590,8 +8650,66 @@ local function updatePlayerEsp(player, precomputed)
 			entry.healthFill = nil
 			entry.devRing = nil
 		end
+		return
 	end
 
+	local _, title = ensureBillboard(entry, character)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local labelParts = {}
+
+	if showDevTag then
+		table.insert(labelParts, DEV_TAG_TEXT)
+	elseif CONFIG.showNames then
+		table.insert(labelParts, player.Name)
+	end
+
+	if not showDevTag and CONFIG.showDistance then
+		table.insert(labelParts, string.format("[%dm]", distance))
+	end
+
+	if not showDevTag and CONFIG.showHealth and humanoid then
+		table.insert(labelParts, string.format("[%d HP]", math.max(0, math.floor(humanoid.Health))))
+	end
+
+	if not showDevTag and CONFIG.showWeapon then
+		local heldTool = getHeldToolName(character)
+		if heldTool then
+			table.insert(labelParts, "[" .. heldTool .. "]")
+		end
+	end
+
+	local labelText = table.concat(labelParts, CONFIG.textStackMode == "Stacked" and "\n" or " ")
+	title.Text = focusTarget and ("[TARGET] " .. labelText) or labelText
+	if showDevTag then
+		title.TextColor3 = devRainbowColor
+		title.TextTransparency = 0
+		updateDevAura(entry, character, devRainbowColor)
+	else
+		title.TextColor3 = focusTarget and THEME.focus or espColor
+		title.TextTransparency = math.clamp((1 - distanceFade) * 0.65, 0, 0.65)
+		hideDevAura(entry)
+	end
+	entry.billboard.Size = CONFIG.textStackMode == "Stacked" and UDim2.new(0, 180, 0, 42) or UDim2.new(0, 180, 0, 30)
+
+	if entry.healthBack and entry.healthFill and humanoid then
+		local healthPercent = 0
+		if humanoid.MaxHealth > 0 then
+			healthPercent = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+		end
+
+		entry.healthBack.Visible = CONFIG.showHealth
+		entry.healthFill.Size = UDim2.new(healthPercent, 0, 1, 0)
+		entry.healthFill.BackgroundColor3 = showDevTag and devRainbowColor or (focusTarget and THEME.focus or Color3.fromRGB(
+			math.floor(255 - (155 * healthPercent)),
+			math.floor(70 + (185 * healthPercent)),
+			math.floor(88 - (32 * healthPercent))
+		))
+	elseif entry.healthBack then
+		entry.healthBack.Visible = false
+	end
+end
+
+local function updateTracerEsp(entry, root, camera, tracerColor, focusTarget, distance, distanceFade)
 	if CONFIG.showTracers and drawingSupported then
 		if not camera then
 			return
@@ -8643,7 +8761,9 @@ local function updatePlayerEsp(player, precomputed)
 			entry.tracerBranch.Visible = false
 		end
 	end
+end
 
+local function updateHeadDotEsp(entry, character, camera, distanceFade, outlineColor, showDevTag, devRainbowColor)
 	if CONFIG.showHeadDot and camera then
 		local head = character:FindFirstChild("Head")
 		local headDot = ensureHeadDot(entry)
@@ -8665,6 +8785,51 @@ local function updatePlayerEsp(player, precomputed)
 	elseif entry.headDot then
 		entry.headDot.Visible = false
 	end
+end
+
+do
+	local playerEspFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\player_esp.lua", PLAYER_ESP_MODULE_SOURCE)
+	if type(playerEspFactory) == "function" then
+		local playerEspModule = playerEspFactory({
+			CONFIG = CONFIG,
+			LOCAL_PLAYER = LOCAL_PLAYER,
+			THEME = THEME,
+			DEV_TAG_DISTANCE = DEV_TAG_DISTANCE,
+			getEspEntry = getEspEntry,
+			clearEntry = clearEntry,
+			shouldTrackPlayer = shouldTrackPlayer,
+			getCharacterRoot = getCharacterRoot,
+			getEspColor = getEspColor,
+			isPlayerVisible = isPlayerVisible,
+			getDisplayColor = getDisplayColor,
+			getDistanceFade = getDistanceFade,
+			isFocusedTarget = isFocusedTarget,
+			isDevPlayer = isDevPlayer,
+			getRainbowColor = getRainbowColor,
+			getTargetThreatData = getTargetThreatData,
+			getTracerColor = getTracerColor,
+			getCamera = getCamera,
+			getEffectiveBoxMode = getEffectiveBoxMode,
+			ensureHighlight = ensureHighlight,
+			updateBoxEsp = updateBoxEsp,
+			updateSkeletonEsp = updateSkeletonEsp,
+			updateLookDirectionEsp = updateLookDirectionEsp,
+			updateBillboardEsp = updateBillboardEsp,
+			updateTracerEsp = updateTracerEsp,
+			updateHeadDotEsp = updateHeadDotEsp,
+		})
+		if type(playerEspModule) == "table" and type(playerEspModule.updatePlayerEsp) == "function" then
+			playerEspRenderer = playerEspModule.updatePlayerEsp
+		end
+	end
+end
+
+local function updatePlayerEsp(player, precomputed)
+	if playerEspRenderer then
+		return playerEspRenderer(player, precomputed)
+	end
+
+	clearEntry(getEspEntry(player))
 end
 
 local function updatePerfStatsUi()
@@ -8909,29 +9074,9 @@ local function updatePerfStatsUi()
 
 end
 
-local function refreshAllEsp()
-	local refreshStart = os.clock()
-	visibleEnemyCount = 0
-	trackedEnemyCount = 0
-	focusedPlayer = nil
-	local focusedScore = -math.huge
-	local lockedFocusValid = false
-	local localCharacter = LOCAL_PLAYER.Character
-	local localRoot = localCharacter and getCharacterRoot(localCharacter)
+local function collectTrackedPlayers(localRoot)
 	local trackedPlayers = {}
 	local trackedData = {}
-	local groupRadius = 28
-
-	if not localRoot then
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player ~= LOCAL_PLAYER then
-				clearPlayerEsp(player)
-			end
-		end
-		lastRefreshMs = (os.clock() - refreshStart) * 1000
-		updatePerfStatsUi()
-		return
-	end
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player ~= LOCAL_PLAYER then
@@ -8957,6 +9102,10 @@ local function refreshAllEsp()
 		end
 	end
 
+	return trackedPlayers, trackedData
+end
+
+local function populateThreatTelemetry(trackedPlayers, trackedData, localRoot, groupRadius)
 	for index, player in ipairs(trackedPlayers) do
 		local playerData = trackedData[player]
 		if playerData then
@@ -8980,33 +9129,47 @@ local function refreshAllEsp()
 			)
 		end
 	end
+end
+
+local function getThreatScore(playerData)
+	local telemetry = playerData.telemetry
+	local distance = playerData.distance
+	local visible = playerData.visible
+	local mode = CONFIG.threatMode
+
+	if visible then
+		visibleEnemyCount = visibleEnemyCount + 1
+	end
+
+	if mode == "Closest" then
+		return -distance
+	end
+
+	if mode == "Visible" then
+		return (visible and 100000 or 0) - distance
+	end
+
+	if mode == "Armed" then
+		return (playerData.heldTool and 100000 or 0) + (visible and 10000 or 0) - distance
+	end
+
+	if mode == "Smart" then
+		local humanoid = playerData.character:FindFirstChildOfClass("Humanoid")
+		local healthFactor = humanoid and humanoid.MaxHealth > 0 and (1 - math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)) or 0
+		return (visible and 120000 or 0) + (telemetry.weapon and 60000 or 0) + (healthFactor * 20000) + ((telemetry.aimingAtYou and 1 or 0) * 35000) + (telemetry.groupDanger * 4000) - distance
+	end
+
+	return -math.huge
+end
+
+local function resolveFocusedTarget(trackedPlayers, trackedData)
+	local focusedScore = -math.huge
+	local lockedFocusValid = false
 
 	for _, player in ipairs(trackedPlayers) do
 		local playerData = trackedData[player]
 		if playerData then
-			local telemetry = playerData.telemetry
-			local distance = playerData.distance
-			local visible = playerData.visible
-			local character = playerData.character
-					local mode = CONFIG.threatMode
-					local threatScore = -math.huge
-
-			if visible then
-				visibleEnemyCount = visibleEnemyCount + 1
-			end
-
-			if mode == "Closest" then
-				threatScore = -distance
-			elseif mode == "Visible" then
-				threatScore = (visible and 100000 or 0) - distance
-			elseif mode == "Armed" then
-				threatScore = (playerData.heldTool and 100000 or 0) + (visible and 10000 or 0) - distance
-			elseif mode == "Smart" then
-				local humanoid = character:FindFirstChildOfClass("Humanoid")
-				local healthFactor = humanoid and humanoid.MaxHealth > 0 and (1 - math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)) or 0
-				threatScore = (visible and 120000 or 0) + (telemetry.weapon and 60000 or 0) + (healthFactor * 20000) + ((telemetry.aimingAtYou and 1 or 0) * 35000) + (telemetry.groupDanger * 4000) - distance
-			end
-
+			local threatScore = getThreatScore(playerData)
 			if threatScore > focusedScore then
 				focusedScore = threatScore
 				focusedPlayer = player
@@ -9027,7 +9190,9 @@ local function refreshAllEsp()
 	else
 		viewState.lockedFocusTarget = nil
 	end
+end
 
+local function renderTrackedPlayers(trackedData)
 	for _, player in ipairs(Players:GetPlayers()) do
 		if player ~= LOCAL_PLAYER then
 			pcall(function()
@@ -9040,6 +9205,32 @@ local function refreshAllEsp()
 			end)
 		end
 	end
+end
+
+local function refreshAllEsp()
+	local refreshStart = os.clock()
+	visibleEnemyCount = 0
+	trackedEnemyCount = 0
+	focusedPlayer = nil
+	local localCharacter = LOCAL_PLAYER.Character
+	local localRoot = localCharacter and getCharacterRoot(localCharacter)
+	local groupRadius = 28
+
+	if not localRoot then
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LOCAL_PLAYER then
+				clearPlayerEsp(player)
+			end
+		end
+		lastRefreshMs = (os.clock() - refreshStart) * 1000
+		updatePerfStatsUi()
+		return
+	end
+
+	local trackedPlayers, trackedData = collectTrackedPlayers(localRoot)
+	populateThreatTelemetry(trackedPlayers, trackedData, localRoot, groupRadius)
+	resolveFocusedTarget(trackedPlayers, trackedData)
+	renderTrackedPlayers(trackedData)
 
 	lastRefreshMs = (os.clock() - refreshStart) * 1000
 	if currentFps > 0 then
@@ -9237,7 +9428,7 @@ local function setEspEnabled(state)
 	showToast("ESP", state and "ESP enabled" or "ESP disabled", state and THEME.accent or THEME.muted)
 end
 
-local function applyMinimalMode(state, skipSave)
+miniHudLabels.utility.applyMinimalMode = function(state, skipSave)
 	CONFIG.minimalMode = state
 	chrome.infoPanel.Visible = not state
 	chrome.brandSub.Visible = not state
@@ -9268,7 +9459,7 @@ local function applyMinimalMode(state, skipSave)
 	end
 end
 
-local function setMinimized(state)
+miniHudLabels.utility.setMinimized = function(state)
 	uiMinimized = state
 	content.Visible = not state
 	if CONFIG.minimalMode then
@@ -9289,7 +9480,7 @@ function resetOverlayPositions()
 	end
 end
 
-local function finalizeIntroStartup()
+miniHudLabels.utility.finalizeIntroStartup = function()
 	uiReady = true
 	setActiveTab("control")
 	window.Position = UDim2.new(0.5, CONFIG.windowOffsetX, 0.5, CONFIG.windowOffsetY)
@@ -9307,9 +9498,9 @@ local function finalizeIntroStartup()
 
 		task.defer(function()
 			applyPerformanceSettings()
-			applyMinimalMode(CONFIG.minimalMode)
+			miniHudLabels.utility.applyMinimalMode(CONFIG.minimalMode)
 			setActiveTab("control")
-			setMinimized(false)
+			miniHudLabels.utility.setMinimized(false)
 
 			task.defer(function()
 				refreshAllEsp()
@@ -9322,11 +9513,11 @@ local function finalizeIntroStartup()
 	end)
 end
 
-local function playIntroAnimation()
+miniHudLabels.utility.playIntroAnimation = function()
 	if introController and introController.play then
-		introController.play(finalizeIntroStartup)
+		introController.play(miniHudLabels.utility.finalizeIntroStartup)
 	else
-		finalizeIntroStartup()
+		miniHudLabels.utility.finalizeIntroStartup()
 	end
 end
 
@@ -9389,48 +9580,44 @@ bindToggle(miniHudLabels.utility.performanceToggles.textures, "hideTextures")
 bindToggle(miniHudLabels.utility.performanceToggles.effects, "hideEffects")
 bindToggle(miniHudLabels.utility.performanceToggles.shadows, "disableShadows")
 
-for configKey, button in pairs({
-	enabled = miniHudLabels.utility.controls.enabledToggle,
-	showNames = miniHudLabels.utility.displayToggles.names,
-	showDistance = miniHudLabels.utility.displayToggles.distance,
-	distanceFade = miniHudLabels.utility.displayToggles.fade,
-	showHealth = miniHudLabels.utility.displayToggles.health,
-	showWeapon = miniHudLabels.utility.displayToggles.weapon,
-	showSkeleton = miniHudLabels.utility.displayToggles.skeleton,
-	showHeadDot = miniHudLabels.utility.displayToggles.headDot,
-	showFocusTarget = miniHudLabels.utility.displayToggles.focus,
-	showBoxes = miniHudLabels.utility.displayToggles.boxes,
-	showTargetCard = miniHudLabels.utility.displayToggles.targetCard,
-	targetCardCompact = miniHudLabels.utility.displayToggles.targetCardCompact,
-	visibilityCheck = tracerSliders.visibilityToggle,
-	showTracers = tracerSliders.tracersToggle,
-	focusLock = tracerSliders.focusLock,
-	showLookDirection = tracerSliders.lookDirectionToggle,
-	showCrosshair = tracerSliders.crosshairToggle,
-	showFovCircle = tracerSliders.fovCircleToggle,
-	aimTrainerMode = tracerSliders.trainingToggle,
-	trainerReactionTimer = tracerSliders.trainingReactionToggle,
-	trainerChallengeMode = tracerSliders.trainingChallengeToggle,
-	trainerShrinkingTargets = tracerSliders.trainingShrinkingToggle,
-	recoilVisualizer = tracerSliders.recoilVisualizerToggle,
-	spreadVisualizer = tracerSliders.spreadVisualizerToggle,
-	showMiniHud = miniHudLabels.utility.controls.miniHudToggle,
-	removeZoomLimit = viewButtons.removeZoomLimit,
-	walkSpeedEnabled = playerButtons.walkSpeedToggle,
-	infiniteJump = playerButtons.infiniteJump,
-	noclip = playerButtons.noclip,
-	fly = playerButtons.fly,
-	clickTeleport = playerButtons.clickTeleport,
-	antiAfk = miniHudLabels.utility.antiAfk,
-	autoLoadGamePreset = miniHudLabels.utility.autoLoadGamePreset,
-	performanceMode = miniHudLabels.utility.performanceToggles.mode,
-	simplifyMaterials = miniHudLabels.utility.performanceToggles.materials,
-	hideTextures = miniHudLabels.utility.performanceToggles.textures,
-	hideEffects = miniHudLabels.utility.performanceToggles.effects,
-	disableShadows = miniHudLabels.utility.performanceToggles.shadows,
-}) do
-	keybindState.toggleButtonsByConfig[configKey] = button
-end
+keybindState.toggleButtonsByConfig.enabled = miniHudLabels.utility.controls.enabledToggle
+keybindState.toggleButtonsByConfig.showNames = miniHudLabels.utility.displayToggles.names
+keybindState.toggleButtonsByConfig.showDistance = miniHudLabels.utility.displayToggles.distance
+keybindState.toggleButtonsByConfig.distanceFade = miniHudLabels.utility.displayToggles.fade
+keybindState.toggleButtonsByConfig.showHealth = miniHudLabels.utility.displayToggles.health
+keybindState.toggleButtonsByConfig.showWeapon = miniHudLabels.utility.displayToggles.weapon
+keybindState.toggleButtonsByConfig.showSkeleton = miniHudLabels.utility.displayToggles.skeleton
+keybindState.toggleButtonsByConfig.showHeadDot = miniHudLabels.utility.displayToggles.headDot
+keybindState.toggleButtonsByConfig.showFocusTarget = miniHudLabels.utility.displayToggles.focus
+keybindState.toggleButtonsByConfig.showBoxes = miniHudLabels.utility.displayToggles.boxes
+keybindState.toggleButtonsByConfig.showTargetCard = miniHudLabels.utility.displayToggles.targetCard
+keybindState.toggleButtonsByConfig.targetCardCompact = miniHudLabels.utility.displayToggles.targetCardCompact
+keybindState.toggleButtonsByConfig.visibilityCheck = tracerSliders.visibilityToggle
+keybindState.toggleButtonsByConfig.showTracers = tracerSliders.tracersToggle
+keybindState.toggleButtonsByConfig.focusLock = tracerSliders.focusLock
+keybindState.toggleButtonsByConfig.showLookDirection = tracerSliders.lookDirectionToggle
+keybindState.toggleButtonsByConfig.showCrosshair = tracerSliders.crosshairToggle
+keybindState.toggleButtonsByConfig.showFovCircle = tracerSliders.fovCircleToggle
+keybindState.toggleButtonsByConfig.aimTrainerMode = tracerSliders.trainingToggle
+keybindState.toggleButtonsByConfig.trainerReactionTimer = tracerSliders.trainingReactionToggle
+keybindState.toggleButtonsByConfig.trainerChallengeMode = tracerSliders.trainingChallengeToggle
+keybindState.toggleButtonsByConfig.trainerShrinkingTargets = tracerSliders.trainingShrinkingToggle
+keybindState.toggleButtonsByConfig.recoilVisualizer = tracerSliders.recoilVisualizerToggle
+keybindState.toggleButtonsByConfig.spreadVisualizer = tracerSliders.spreadVisualizerToggle
+keybindState.toggleButtonsByConfig.showMiniHud = miniHudLabels.utility.controls.miniHudToggle
+keybindState.toggleButtonsByConfig.removeZoomLimit = viewButtons.removeZoomLimit
+keybindState.toggleButtonsByConfig.walkSpeedEnabled = playerButtons.walkSpeedToggle
+keybindState.toggleButtonsByConfig.infiniteJump = playerButtons.infiniteJump
+keybindState.toggleButtonsByConfig.noclip = playerButtons.noclip
+keybindState.toggleButtonsByConfig.fly = playerButtons.fly
+keybindState.toggleButtonsByConfig.clickTeleport = playerButtons.clickTeleport
+keybindState.toggleButtonsByConfig.antiAfk = miniHudLabels.utility.antiAfk
+keybindState.toggleButtonsByConfig.autoLoadGamePreset = miniHudLabels.utility.autoLoadGamePreset
+keybindState.toggleButtonsByConfig.performanceMode = miniHudLabels.utility.performanceToggles.mode
+keybindState.toggleButtonsByConfig.simplifyMaterials = miniHudLabels.utility.performanceToggles.materials
+keybindState.toggleButtonsByConfig.hideTextures = miniHudLabels.utility.performanceToggles.textures
+keybindState.toggleButtonsByConfig.hideEffects = miniHudLabels.utility.performanceToggles.effects
+keybindState.toggleButtonsByConfig.disableShadows = miniHudLabels.utility.performanceToggles.shadows
 
 do
 	local keybindFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\keybinds.lua", KEYBINDS_MODULE_SOURCE)
@@ -9471,9 +9658,9 @@ do
 end
 
 miniHudLabels.utility.controls.minimalToggle.MouseButton1Click:Connect(function()
-	applyMinimalMode(not CONFIG.minimalMode)
+	miniHudLabels.utility.applyMinimalMode(not CONFIG.minimalMode)
 	setToggleState(miniHudLabels.utility.controls.minimalToggle, CONFIG.minimalMode)
-	setMinimized(uiMinimized)
+	miniHudLabels.utility.setMinimized(uiMinimized)
 	showToast("Setting Updated", string.format("%s %s", "Minimal Mode", CONFIG.minimalMode and "enabled" or "disabled"), CONFIG.minimalMode and THEME.accent or THEME.muted)
 end)
 if overlayTools and miniHudLabels.utility.updatePanel.check then
@@ -9689,7 +9876,7 @@ function ensureTrainerProgressRing()
 
 	if #trainer.trackProgressRing ~= 18 then
 		for _, segment in ipairs(trainer.trackProgressRing) do
-			segment:Remove()
+			removeDrawingObject(segment)
 		end
 		trainer.trackProgressRing = nil
 	end
@@ -10279,7 +10466,7 @@ syncUiFromConfig = function()
 	setToggleState(miniHudLabels.utility.performanceToggles.shadows, CONFIG.disableShadows)
 	setToggleState(miniHudLabels.utility.controls.minimalToggle, CONFIG.minimalMode)
 	refreshPresetDropdown()
-	applyMinimalMode(CONFIG.minimalMode, true)
+	miniHudLabels.utility.applyMinimalMode(CONFIG.minimalMode, true)
 	updateControlAvailability()
 	setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
 	setSliderState(tracerSliders.trainingHitWindow, CONFIG.trainerHitWindow)
@@ -11166,7 +11353,7 @@ miniHudLabels.utility.tools.MouseButton1Click:Connect(function()
 end)
 
 chrome.minimizeButton.MouseButton1Click:Connect(function()
-	setMinimized(not uiMinimized)
+	miniHudLabels.utility.setMinimized(not uiMinimized)
 end)
 
 window:GetPropertyChangedSignal("Position"):Connect(function()
@@ -11731,4 +11918,4 @@ RunService.RenderStepped:Connect(function(deltaTime)
 	end
 end)
 
-task.spawn(playIntroAnimation)
+task.spawn(miniHudLabels.utility.playIntroAnimation)
