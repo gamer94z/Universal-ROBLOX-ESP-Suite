@@ -2,7 +2,7 @@
 
 A proprietary Roblox ESP release by `0xVyrs`.
 
-**Version:** `v1.4.0`
+**Version:** `v1.4.1`
 
 ## Ownership
 
