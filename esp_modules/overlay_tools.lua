@@ -8,14 +8,13 @@
 
 return function(context)
 	local releaseTrack = {
-		latestVersion = "1.4.1",
-		title = "Stability Fixes + UI Cleanup",
+		latestVersion = "1.5",
+		title = "v1.5 UI + Safety Cleanup",
 		notes = {
-			"Fixed issues that could make the script stop working properly.",
-			"Improved crosshair and mouse-follow behavior.",
-			"Cleaned up the menu so main pages are easier to use.",
-			"Updated the intro and UI styling to feel more consistent.",
-			"Improved overall stability across the main features.",
+			"Free Cam turned off until further notice.",
+			"Added warning symbols to risky features.",
+			"Shrunk the UI for a cleaner layout.",
+			"Fixed UI alignment and dragging issues.",
 		},
 	}
 
@@ -80,7 +79,39 @@ return function(context)
 		end
 	end
 
-	local function makeOverlayDraggable(frame, overlayId)
+	local function bindOverlayDrag(frame, overlayId, handle)
+		local dragging = false
+		local dragStart
+		local startPosition
+
+		handle.Active = true
+		handle.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+
+			dragging = true
+			dragStart = input.Position
+			startPosition = frame.AbsolutePosition
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end)
+
+		context.userInputService.InputChanged:Connect(function(input)
+			if not dragging or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then
+				return
+			end
+
+			local delta = input.Position - dragStart
+			setOverlayPosition(frame, overlayId, startPosition.X + delta.X, startPosition.Y + delta.Y, false)
+		end)
+	end
+
+	local function makeOverlayDraggable(frame, overlayId, dragHandle)
 		local keyX, keyY = getOverlayConfigKeys(overlayId)
 		if not keyX or not keyY then
 			return
@@ -93,7 +124,21 @@ return function(context)
 			setOverlayPosition(frame, overlayId, context.config[keyX], context.config[keyY], true)
 		end
 		frame.Active = true
-		frame.Draggable = true
+		frame.Draggable = false
+		local handle = dragHandle
+		if not handle then
+			handle = context.create("TextButton", {
+				AutoButtonColor = false,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Position = UDim2.new(0, 0, 0, 0),
+				Size = UDim2.new(1, 0, 0, math.min(42, math.max(24, frame.AbsoluteSize.Y))),
+				Text = "",
+				ZIndex = (frame.ZIndex or 1) + 10,
+				Parent = frame,
+			})
+		end
+		bindOverlayDrag(frame, overlayId, handle)
 		frame:GetPropertyChangedSignal("Position"):Connect(function()
 			local position = frame.Position
 			if position.X.Scale ~= 0 or position.Y.Scale ~= 0 then

@@ -98,7 +98,7 @@ local CONFIG = {
 	maxDistance = 2500,
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
-	version = "1.4.1",
+	version = "1.5",
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	miniHudOffsetX = -1,
@@ -114,7 +114,6 @@ local CONFIG = {
 }
 
 local DEFAULT_FEATURE_KEYBINDS = {
-	freeCam = "V",
 	focusLock = "Q",
 	showTracers = "T",
 	showCrosshair = "C",
@@ -130,7 +129,6 @@ for featureId, keyText in pairs(DEFAULT_FEATURE_KEYBINDS) do
 end
 
 local DEFAULT_FEATURE_KEYBIND_MODES = {
-	freeCam = "Toggle",
 	focusLock = "Toggle",
 	showTracers = "Toggle",
 	showCrosshair = "Toggle",
@@ -313,7 +311,13 @@ local NON_PERSISTENT_CONFIG_KEYS = {
 	hideEffects = true,
 	disableShadows = true,
 }
-local visibleEnemyCount = 0
+local espRuntimeState = {
+	visibleEnemyCount = 0,
+	trackedEnemyCount = 0,
+	lastRefreshMs = 0,
+	updateInterval = 1 / 30,
+	focusedPlayer = nil,
+}
 local PRESETS
 local currentPresetIndex = 2
 local SETTING_KEYS
@@ -322,6 +326,51 @@ local uiReady = false
 local syncUiFromConfig
 local getCharacterRoot
 local applyConfigToggleState
+local updateMouseIconVisibility
+local pages
+local tabButtons
+local createNoteRow
+local createOptionButtonsRow
+local createPerfRow
+local createRow
+local createSliderRow
+local createSpectateRow
+local createStatusRow
+local createTabButton
+local createToggleRow
+local createKeybindRow
+local createCycleRow
+local setActiveTab
+local setOptionButtonsState
+local setSliderState
+local setToggleState
+local applySliderVisual
+local bindSliderValueInput
+local bindToggle
+local setEspEnabled
+local resetOverlayPositions
+local clearEntry
+local clearPlayerEsp
+local refreshAllEsp
+local clearAllEsp
+local resetAllBoxEspVisuals
+local trackingRuntime
+local viewRuntime
+local performanceRuntime
+local statusRuntime
+local applyZoomLimitSetting
+local setLocalMovementSuppressed
+local restoreLocalCamera
+local updateViewUi
+local setSpectateTarget
+local toggleFreeCam
+local applyCameraFov
+local getMouseScreenPosition
+local getTracerOrigin
+local applyPerformanceSettings
+local updatePerfStatsUi
+local updateCrosshair
+local hideCrosshair
 local loadedTrainerRecords
 local loadedTrainerCustomPresets
 local keybindController
@@ -333,1646 +382,17 @@ local playerEspRenderer
 local keybindState = {
 	toggleButtonsByConfig = {},
 }
-local KEYBINDS_MODULE_SOURCE = [==[
-return function(context)
-	local featureDefs = {
-		{ id = "freeCam", label = "Free Cam" },
-		{ id = "focusLock", label = "Focus Lock" },
-		{ id = "showTargetCard", label = "Target Card" },
-		{ id = "showMiniHud", label = "Mini HUD" },
-		{ id = "showLookDirection", label = "Look Dir" },
-		{ id = "showTracers", label = "Tracers" },
-		{ id = "showCrosshair", label = "Crosshair" },
-		{ id = "showFovCircle", label = "FOV Circle" },
-	}
-
-	local MODE_VALUES = { "Toggle", "Hold" }
-	local MOUSE_INPUTS = {
-		MouseButton1 = Enum.UserInputType.MouseButton1,
-		MouseButton2 = Enum.UserInputType.MouseButton2,
-		MouseButton3 = Enum.UserInputType.MouseButton3,
-	}
-	local MOUSE_ORDER = { "MouseButton1", "MouseButton2", "MouseButton3" }
-	local state = {
-		listening = nil,
-		rows = {},
-		modeButtons = {},
-		enabledButton = nil,
-		displayButton = nil,
-		menu = nil,
-		list = nil,
-		title = nil,
-		count = nil,
-		held = {},
-	}
-
-	local function getDef(featureId)
-		for _, def in ipairs(featureDefs) do
-			if def.id == featureId then
-				return def
-			end
-		end
-	end
-
-	local function getKeybindText(id)
-		return context.featureKeybinds[id]
-	end
-
-	local function isMouseBindText(text)
-		return MOUSE_INPUTS[text] ~= nil
-	end
-
-	local function getBindDescriptor(text)
-		if not text or text == "" then
-			return nil
-		end
-
-		if isMouseBindText(text) then
-			return {
-				text = text,
-				userInputType = MOUSE_INPUTS[text],
-			}
-		end
-
-		local keyCode = context.keyTextToKeyCode(text)
-		if keyCode then
-			return {
-				text = context.keyCodeToText(keyCode),
-				keyCode = keyCode,
-			}
-		end
-
-		return nil
-	end
-
-	local function getBindForId(id)
-		return getBindDescriptor(getKeybindText(id))
-	end
-
-	local function inputToBindText(input)
-		if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
-			return context.keyCodeToText(input.KeyCode)
-		end
-
-		for _, bindText in ipairs(MOUSE_ORDER) do
-			if input.UserInputType == MOUSE_INPUTS[bindText] then
-				return bindText
-			end
-		end
-
-		return nil
-	end
-
-	local function inputMatchesBind(input, bind)
-		if not bind then
-			return false
-		end
-
-		if bind.keyCode then
-			return input.KeyCode == bind.keyCode
-		end
-
-		if bind.userInputType then
-			return input.UserInputType == bind.userInputType
-		end
-
-		return false
-	end
-
-	local function getReservedBindTexts()
-		local reserved = {}
-		local function push(keyCode)
-			if keyCode then
-				reserved[context.keyCodeToText(keyCode)] = true
-			end
-		end
-
-		push(context.config.uiToggleKey)
-		push(context.config.quickHideKey)
-		push(context.config.espToggleKey)
-		push(context.config.panicKey)
-		return reserved
-	end
-
-	local function getMode(id)
-		return context.featureKeybindModes[id] or "Toggle"
-	end
-
-	local function setMode(id, mode)
-		context.featureKeybindModes[id] = mode
-	end
-
-	local function isActive(id)
-		if id == "freeCam" then
-			return context.viewState.freeCamEnabled
-		end
-
-		return context.config[id] == true
-	end
-
-	local function setFeatureActive(id, desiredState)
-		if id == "freeCam" then
-			if context.viewState.freeCamEnabled ~= desiredState then
-				context.toggleFreeCam()
-			end
-			return
-		end
-
-		if context.config[id] ~= desiredState then
-			context.applyConfigToggleState(id, desiredState)
-		end
-	end
-
-	local function trigger(id)
-		if getMode(id) == "Hold" then
-			if not state.held[id] then
-				state.held[id] = true
-				setFeatureActive(id, true)
-			end
-			return
-		end
-
-		setFeatureActive(id, not isActive(id))
-	end
-
-	local function release(id)
-		if getMode(id) == "Hold" and state.held[id] then
-			state.held[id] = nil
-			setFeatureActive(id, false)
-		end
-	end
-
-	local function isTyping()
-		return context.userInputService and context.userInputService:GetFocusedTextBox() ~= nil
-	end
-
-	local function releaseAllHeld()
-		for _, def in ipairs(featureDefs) do
-			release(def.id)
-		end
-	end
-
-	local function cycleMode(currentMode)
-		for index, value in ipairs(MODE_VALUES) do
-			if value == currentMode then
-				return MODE_VALUES[(index % #MODE_VALUES) + 1]
-			end
-		end
-		return MODE_VALUES[1]
-	end
-
-	local function refreshRows()
-		for _, def in ipairs(featureDefs) do
-			local button = state.rows[def.id]
-			if button then
-				if state.listening == def.id then
-					button.Text = "PRESS..."
-					button.BackgroundColor3 = context.theme.accentSoft
-				else
-					local text = getKeybindText(def.id)
-					button.Text = (text and text ~= "") and text or "NONE"
-					button.BackgroundColor3 = Color3.fromRGB(35, 40, 53)
-				end
-			end
-
-			local modeButton = state.modeButtons[def.id]
-			if modeButton then
-				modeButton.Text = string.upper(getMode(def.id))
-			end
-		end
-
-		if state.displayButton then
-			if context.setToggleState then
-				context.setToggleState(state.displayButton, context.config.showKeybindsUi)
-			else
-				state.displayButton.Text = context.config.showKeybindsUi and "ON" or "OFF"
-			end
-		end
-
-		if state.enabledButton then
-			if context.setToggleState then
-				context.setToggleState(state.enabledButton, context.config.keybindsEnabled)
-			else
-				state.enabledButton.Text = context.config.keybindsEnabled and "ON" or "OFF"
-			end
-		end
-	end
-
-	local function getActiveEntries()
-		local entries = {}
-		for _, def in ipairs(featureDefs) do
-			local bind = getBindForId(def.id)
-			if bind and isActive(def.id) then
-				table.insert(entries, {
-					key = bind.text,
-					label = def.label,
-					mode = getMode(def.id),
-				})
-			end
-		end
-
-		table.sort(entries, function(a, b)
-			return a.label < b.label
-		end)
-
-		return entries
-	end
-
-	local function getAssignedEntries()
-		local entries = {}
-		for _, def in ipairs(featureDefs) do
-			local bind = getBindForId(def.id)
-			if bind then
-				table.insert(entries, {
-					key = bind.text,
-					label = def.label,
-					mode = getMode(def.id),
-				})
-			end
-		end
-
-		table.sort(entries, function(a, b)
-			return a.label < b.label
-		end)
-
-		return entries
-	end
-
-	local function updateMenu()
-		if not state.menu or not state.list or not state.count then
-			return
-		end
-
-		for _, child in ipairs(state.list:GetChildren()) do
-			if not child:IsA("UIListLayout") then
-				child:Destroy()
-			end
-		end
-
-		local activeEntries = getActiveEntries()
-		local assignedEntries = getAssignedEntries()
-		local showMenu = #activeEntries > 0 or #assignedEntries > 0
-		local allowVisible = true
-		if context.isUiReady then
-			allowVisible = context.isUiReady()
-		end
-		state.menu.Visible = allowVisible and context.gui.Enabled and context.config.showKeybindsUi and showMenu
-		state.count.Text = context.config.keybindsEnabled and string.format("%d ACTIVE", #activeEntries) or "DISABLED"
-
-		local menuHeight = 42
-
-		local function addSectionLabel(text, color)
-			menuHeight = menuHeight + 14
-			context.create("TextLabel", {
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				Size = UDim2.new(1, 0, 0, 12),
-				Font = Enum.Font.GothamBold,
-				Text = text,
-				TextColor3 = color,
-				TextSize = 8,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				ZIndex = 13,
-				Parent = state.list,
-			})
-		end
-
-		local function addEntryRow(entry, textColor, rowColor)
-			menuHeight = menuHeight + 24
-			local row = context.create("Frame", {
-				BackgroundColor3 = rowColor,
-				BorderSizePixel = 0,
-				Size = UDim2.new(1, 0, 0, 20),
-				ZIndex = 13,
-				Parent = state.list,
-			})
-			context.addCorner(row, 6)
-
-			local label = context.makeLabel(row, entry.label, 9, textColor, Enum.Font.GothamMedium)
-			label.Position = UDim2.new(0, 8, 0, 0)
-			label.Size = UDim2.new(1, -86, 1, 0)
-			label.ZIndex = 14
-
-			local keyBadge = context.create("TextLabel", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				BackgroundColor3 = Color3.fromRGB(38, 44, 56),
-				BorderSizePixel = 0,
-				Position = UDim2.new(1, -8, 0.5, 0),
-				Size = UDim2.new(0, 54, 0, 14),
-				Font = Enum.Font.GothamBold,
-				Text = entry.key,
-				TextColor3 = context.theme.text,
-				TextSize = 8,
-				ZIndex = 14,
-				Parent = row,
-			})
-			context.addCorner(keyBadge, 999)
-
-			if entry.mode == "Hold" then
-				local modeBadge = context.create("TextLabel", {
-					AnchorPoint = Vector2.new(1, 0.5),
-					BackgroundColor3 = context.theme.accentSoft,
-					BorderSizePixel = 0,
-					Position = UDim2.new(1, -66, 0.5, 0),
-					Size = UDim2.new(0, 28, 0, 14),
-					Font = Enum.Font.GothamBold,
-					Text = "HOLD",
-					TextColor3 = context.theme.text,
-					TextSize = 7,
-					ZIndex = 14,
-					Parent = row,
-				})
-				context.addCorner(modeBadge, 999)
-			end
-		end
-
-		if #activeEntries > 0 then
-			addSectionLabel("ACTIVE", context.theme.accent)
-			for _, entry in ipairs(activeEntries) do
-				addEntryRow(entry, context.theme.text, Color3.fromRGB(27, 33, 44))
-			end
-		end
-
-		if #assignedEntries > 0 then
-			addSectionLabel("ASSIGNED", context.theme.muted)
-			for _, entry in ipairs(assignedEntries) do
-				addEntryRow(entry, context.theme.muted, Color3.fromRGB(22, 27, 36))
-			end
-		end
-
-		state.menu.Size = UDim2.new(0, 232, 0, menuHeight)
-	end
-
-	local function buildWatermarkMenu()
-		local menu = context.create("Frame", {
-			BackgroundColor3 = Color3.fromRGB(18, 22, 32),
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 16, 0, 98),
-			Size = UDim2.new(0, 232, 0, 42),
-			Visible = false,
-			ZIndex = 12,
-			Parent = context.gui,
-		})
-		context.addCorner(menu, 8)
-		context.addStroke(menu, context.theme.border, 0.25, 1)
-
-		local accent = context.create("Frame", {
-			BackgroundColor3 = context.theme.accent,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 0, 0, 0),
-			Size = UDim2.new(0, 3, 1, 0),
-			ZIndex = 13,
-			Parent = menu,
-		})
-		context.addCorner(accent, 8)
-
-		local title = context.makeLabel(menu, "KEYBINDS", 10, context.theme.text, Enum.Font.GothamBold)
-		title.Position = UDim2.new(0, 12, 0, 4)
-		title.Size = UDim2.new(0, 100, 0, 14)
-		title.ZIndex = 13
-
-		local dragHandle = context.create("TextButton", {
-			AutoButtonColor = false,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 0, 0, 0),
-			Size = UDim2.new(1, 0, 0, 24),
-			Text = "",
-			ZIndex = 14,
-			Parent = menu,
-		})
-
-		local count = context.create("TextLabel", {
-			AnchorPoint = Vector2.new(1, 0),
-			BackgroundColor3 = context.theme.accentSoft,
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0, 6),
-			Size = UDim2.new(0, 62, 0, 16),
-			Font = Enum.Font.GothamBold,
-			Text = "0 ACTIVE",
-			TextColor3 = context.theme.text,
-			TextSize = 8,
-			ZIndex = 13,
-			Parent = menu,
-		})
-		context.addCorner(count, 999)
-
-		local list = context.create("Frame", {
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 8, 0, 24),
-			Size = UDim2.new(1, -16, 1, -28),
-			ZIndex = 13,
-			Parent = menu,
-		})
-
-		context.create("UIListLayout", {
-			Padding = UDim.new(0, 4),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = list,
-		})
-
-		state.menu = menu
-		state.list = list
-		state.title = title
-		state.count = count
-		if context.makeOverlayDraggable then
-			context.makeOverlayDraggable(menu, "keybindPanel", dragHandle)
-		end
-	end
-
-	local function assignKeybind(featureId, newText)
-		local reserved = getReservedBindTexts()
-		if newText ~= "" and reserved[newText] then
-			if context.showToast then
-				context.showToast("Keybinds", string.format("%s is reserved", newText), context.theme.muted)
-			end
-			return false
-		end
-
-		for otherId, otherText in pairs(context.featureKeybinds) do
-			if otherId ~= featureId and otherText == newText and newText ~= "" then
-				context.featureKeybinds[otherId] = ""
-				local otherDef = getDef(otherId)
-				if context.showToast and otherDef then
-					context.showToast("Keybinds", string.format("%s moved off %s", otherDef.label, newText), context.theme.muted)
-				end
-			end
-		end
-
-		context.featureKeybinds[featureId] = newText
-		return true
-	end
-
-	local function resetDefaults()
-		for featureId, keyText in pairs(context.defaultFeatureKeybinds) do
-			context.featureKeybinds[featureId] = keyText
-		end
-		for featureId, modeText in pairs(context.defaultFeatureKeybindModes) do
-			context.featureKeybindModes[featureId] = modeText
-			release(featureId)
-		end
-		context.saveSettings()
-		refreshRows()
-		updateMenu()
-		if context.showToast then
-			context.showToast("Keybinds", "Binds reset to defaults", context.theme.accent)
-		end
-	end
-
-	local function buildRows(parent)
-		local pairIndex = 0
-		local function styleSection(row, accentColor)
-			if not row then
-				return
-			end
-			row.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
-			local stroke = row:FindFirstChildOfClass("UIStroke")
-			if stroke then
-				stroke.Color = accentColor or context.theme.border
-				stroke.Transparency = 0.28
-			end
-		end
-
-		local function styleBindRow(row, isModeRow)
-			if not row then
-				return
-			end
-			local toneA = isModeRow and Color3.fromRGB(24, 28, 38) or Color3.fromRGB(30, 34, 45)
-			local toneB = isModeRow and Color3.fromRGB(21, 25, 34) or Color3.fromRGB(26, 30, 40)
-			row.BackgroundColor3 = (pairIndex % 2 == 0) and toneA or toneB
-			local stroke = row:FindFirstChildOfClass("UIStroke")
-			if stroke then
-				stroke.Transparency = isModeRow and 0.52 or 0.4
-			end
-		end
-
-		local _, headerValue = context.createStatusRow(parent, "BINDS", "PRESS / DEL / RMB")
-		headerValue.TextColor3 = context.theme.accent
-
-		local enabledRow, enabledButton = context.createToggleRow(parent, "KEYBINDS ENABLED", context.config.keybindsEnabled)
-		styleSection(enabledRow, context.theme.accent)
-		state.enabledButton = enabledButton
-		enabledButton.MouseButton1Click:Connect(function()
-			context.config.keybindsEnabled = not context.config.keybindsEnabled
-			if not context.config.keybindsEnabled then
-				releaseAllHeld()
-			end
-			context.saveSettings()
-			refreshRows()
-			updateMenu()
-		end)
-
-		local displayRow, displayButton = context.createToggleRow(parent, "DISPLAY PANEL", context.config.showKeybindsUi)
-		styleSection(displayRow, context.theme.border)
-		state.displayButton = displayButton
-		displayButton.MouseButton1Click:Connect(function()
-			context.config.showKeybindsUi = not context.config.showKeybindsUi
-			context.saveSettings()
-			refreshRows()
-			updateMenu()
-		end)
-
-		styleSection(select(1, context.createStatusRow(parent, "VIEW + TARGET", "TOGGLE")), context.theme.focus)
-		for _, def in ipairs(featureDefs) do
-			if def.id == "showTracers" then
-				styleSection(select(1, context.createStatusRow(parent, "VISUAL OVERLAYS", "TOGGLE")), context.theme.accent)
-			end
-			local bindRow, button = context.createKeybindRow(parent, string.upper(def.label), getKeybindText(def.id) or "NONE")
-			styleBindRow(bindRow, false)
-			state.rows[def.id] = button
-			button.MouseButton1Click:Connect(function()
-				state.listening = state.listening == def.id and nil or def.id
-				refreshRows()
-			end)
-			button.MouseButton2Click:Connect(function()
-				assignKeybind(def.id, "")
-				context.saveSettings()
-				refreshRows()
-				updateMenu()
-				if context.showToast then
-					context.showToast("Keybinds", string.format("%s cleared", def.label), context.theme.muted)
-				end
-			end)
-
-			local modeRow, modeButton = context.createCycleRow(parent, string.upper(def.label .. " MODE"), string.upper(getMode(def.id)))
-			styleBindRow(modeRow, true)
-			state.modeButtons[def.id] = modeButton
-			modeButton.MouseButton1Click:Connect(function()
-				setMode(def.id, cycleMode(getMode(def.id)))
-				context.saveSettings()
-				refreshRows()
-				updateMenu()
-			end)
-			pairIndex = pairIndex + 1
-		end
-
-		styleSection(select(1, context.createStatusRow(parent, "RESET", "DEFAULTS")), context.theme.muted)
-		local resetRow, resetButton = context.createCycleRow(parent, "RESET BINDS", "DEFAULTS")
-		styleBindRow(resetRow, true)
-		resetButton.MouseButton1Click:Connect(resetDefaults)
-
-		refreshRows()
-	end
-
-	local function fireToast(def)
-		if not context.showToast then
-			return
-		end
-
-		local active = isActive(def.id)
-		context.showToast("Keybind", string.format("%s %s", def.label, active and "ON" or "OFF"), active and context.theme.accent or context.theme.muted)
-	end
-
-	local function handleInput(input)
-		if state.listening then
-			if input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then
-				assignKeybind(state.listening, "")
-			else
-				local bindText = inputToBindText(input)
-				if bindText then
-					assignKeybind(state.listening, bindText)
-				end
-			end
-
-			state.listening = nil
-			context.saveSettings()
-			refreshRows()
-			updateMenu()
-			return true
-		end
-
-		if isTyping() then
-			return false
-		end
-
-		if not context.config.keybindsEnabled then
-			return false
-		end
-
-		for _, def in ipairs(featureDefs) do
-			local bind = getBindForId(def.id)
-			if bind and inputMatchesBind(input, bind) then
-				trigger(def.id)
-				fireToast(def)
-				updateMenu()
-				return true
-			end
-		end
-
-		return false
-	end
-
-	local function handleInputEnded(input)
-		if isTyping() then
-			return
-		end
-
-		for _, def in ipairs(featureDefs) do
-			local bind = getBindForId(def.id)
-			if bind and inputMatchesBind(input, bind) then
-				release(def.id)
-			end
-		end
-
-		updateMenu()
-	end
-
-	buildWatermarkMenu()
-
-	return {
-		buildRows = buildRows,
-		handleInput = handleInput,
-		handleInputEnded = handleInputEnded,
-		resetPosition = function()
-			if context.resetOverlayPosition and state.menu then
-				context.resetOverlayPosition(state.menu, "keybindPanel")
-			end
-		end,
-		update = function()
-			refreshRows()
-			updateMenu()
-		end,
-	}
-end
-]==]
-local UI_FRAMEWORK_MODULE_SOURCE = [==[
-return function(context)
-	local create = context.create
-	local addCorner = context.addCorner
-	local addStroke = context.addStroke
-	local makeLabel = context.makeLabel
-	local TweenService = context.TweenService
-	local theme = context.theme
-	local tabBar = context.tabBar
-	local pagesContainer = context.pagesContainer
-	local colorOptions = context.colorOptions or {}
-
-	local function createPage()
-		local page = create("ScrollingFrame", {
-			Active = true,
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			ScrollBarImageColor3 = theme.accent,
-			ScrollBarThickness = 4,
-			ScrollingDirection = Enum.ScrollingDirection.Y,
-			Size = UDim2.new(1, 0, 1, 0),
-			Visible = false,
-			Parent = pagesContainer,
-		})
-
-		create("UIPadding", {
-			PaddingLeft = UDim.new(0, 12),
-			PaddingRight = UDim.new(0, 12),
-			PaddingTop = UDim.new(0, 10),
-			PaddingBottom = UDim.new(0, 0),
-			Parent = page,
-		})
-
-		create("UIListLayout", {
-			Padding = UDim.new(0, 5),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = page,
-		})
-
-		return page
-	end
-
-	local pages = {
-		control = createPage(),
-		keybinds = createPage(),
-		display = createPage(),
-		combat = createPage(),
-		player = createPage(),
-		performance = createPage(),
-	}
-
-	local tabButtons = {}
-
-	local function createRow(parent, height)
-		local row = create("Frame", {
-			BackgroundColor3 = theme.panel,
-			BorderSizePixel = 0,
-			Size = UDim2.new(1, 0, 0, height or 28),
-			Parent = parent,
-		})
-		addCorner(row, 8)
-		addStroke(row, theme.border, 0.45, 1)
-		return row
-	end
-
-	local function createStatusRow(parent, labelText, valueText)
-		local row = createRow(parent, 24)
-		local label = makeLabel(row, labelText, 11, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(0, 120, 1, 0)
-
-		local value = makeLabel(row, valueText, 11, theme.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-		value.AnchorPoint = Vector2.new(1, 0)
-		value.Position = UDim2.new(1, -10, 0, 0)
-		value.Size = UDim2.new(0, 132, 1, 0)
-		return row, value
-	end
-
-	local function createNoteRow(parent, text)
-		local row = createRow(parent, 26)
-		row.BackgroundColor3 = theme.panelAlt
-		local label = makeLabel(row, text, 9, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(1, -20, 1, 0)
-		return row, label
-	end
-
-	local function createPerfRow(parent)
-		local row = createRow(parent, 34)
-
-		local statHolder = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 0, 0.5, 0),
-			Size = UDim2.new(1, -18, 1, -8),
-			Parent = row,
-		})
-
-		create("UIGridLayout", {
-			CellPadding = UDim2.new(0, 6, 0, 0),
-			CellSize = UDim2.new(0.25, -5, 1, 0),
-			FillDirectionMaxCells = 4,
-			HorizontalAlignment = Enum.HorizontalAlignment.Center,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = statHolder,
-		})
-
-		local stats = {}
-		for _, item in ipairs({
-			{ key = "fps", title = "FPS" },
-			{ key = "visible", title = "VISIBLE" },
-			{ key = "tracked", title = "TRACKED" },
-			{ key = "update", title = "UPDATE" },
-		}) do
-			local cell = create("Frame", {
-				BackgroundColor3 = theme.panelAlt,
-				BorderSizePixel = 0,
-				Parent = statHolder,
-			})
-			addCorner(cell, 6)
-
-			local title = makeLabel(cell, item.title, 8, theme.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-			title.Position = UDim2.new(0, 0, 0, 2)
-			title.Size = UDim2.new(1, 0, 0, 10)
-
-			local value = makeLabel(cell, "--", 10, theme.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-			value.Position = UDim2.new(0, 0, 0, 12)
-			value.Size = UDim2.new(1, 0, 1, -12)
-
-			stats[item.key] = value
-		end
-
-		return row, stats
-	end
-
-	local function createCycleRow(parent, labelText, valueText)
-		local row = createRow(parent, 30)
-		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(0, 110, 1, 0)
-
-		local valueButton = create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0.5, 0),
-			Size = UDim2.new(0, 126, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = valueText,
-			TextColor3 = theme.text,
-			TextSize = 10,
-			Parent = row,
-		})
-		addCorner(valueButton, 4)
-		addStroke(valueButton, theme.border, 0.25, 1)
-		return row, valueButton
-	end
-
-	local function createToggleRow(parent, labelText, defaultState)
-		local row = createRow(parent, 30)
-		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(0, 186, 1, 0)
-
-		local button = create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			AutoButtonColor = false,
-			BackgroundColor3 = defaultState and theme.accentSoft or Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0.5, 0),
-			Size = UDim2.new(0, 46, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = defaultState and "ON" or "OFF",
-			TextColor3 = defaultState and Color3.fromRGB(228, 241, 255) or theme.muted,
-			TextSize = 9,
-			Parent = row,
-		})
-		addCorner(button, 999)
-		addStroke(button, theme.accent, defaultState and 0.15 or 0.65, 1)
-		return row, button
-	end
-
-	local function createKeybindRow(parent, labelText, valueText)
-		local row = createRow(parent, 30)
-		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(0, 170, 1, 0)
-
-		local button = create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0.5, 0),
-			Size = UDim2.new(0, 72, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = valueText,
-			TextColor3 = theme.text,
-			TextSize = 9,
-			Parent = row,
-		})
-		addCorner(button, 999)
-		addStroke(button, theme.accent, 0.55, 1)
-		return row, button
-	end
-
-	local function createOptionButtonsRow(parent, labelText, options, selectedValue, formatter)
-		local row = createRow(parent, 52)
-
-		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 6)
-		label.Size = UDim2.new(1, -20, 0, 12)
-
-		local holder = create("Frame", {
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 10, 0, 24),
-			Size = UDim2.new(1, -20, 0, 20),
-			Parent = row,
-		})
-
-		create("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			Padding = UDim.new(0, 4),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = holder,
-		})
-
-		local buttons = {}
-		for _, option in ipairs(options) do
-			local text = formatter and formatter(option) or tostring(option)
-			local textColor = option == selectedValue and theme.text or theme.muted
-			local button = create("TextButton", {
-				AutoButtonColor = false,
-				BackgroundColor3 = option == selectedValue and theme.accentSoft or Color3.fromRGB(35, 40, 53),
-				BorderSizePixel = 0,
-				Size = UDim2.new(0, math.max(32, 18 + (#text * 6)), 1, 0),
-				Font = Enum.Font.GothamBold,
-				Text = text,
-				TextColor3 = textColor,
-				TextSize = 9,
-				Parent = holder,
-			})
-			addCorner(button, 999)
-			addStroke(button, theme.accent, option == selectedValue and 0.15 or 0.65, 1)
-			table.insert(buttons, {
-				value = option,
-				button = button,
-			})
-		end
-
-		return row, buttons
-	end
-
-	local function setOptionButtonsState(buttonEntries, selectedValue)
-		for _, entry in ipairs(buttonEntries) do
-			local selected = entry.value == selectedValue
-			local backgroundColor = selected and theme.accentSoft or Color3.fromRGB(35, 40, 53)
-			local textColor = selected and theme.text or theme.muted
-			local strokeTransparency = selected and 0.15 or 0.65
-
-			if entry.button:GetAttribute("TrainerPresetButton") then
-				local presetColor = entry.button:GetAttribute("PresetColor")
-				if typeof(presetColor) == "Color3" then
-					backgroundColor = selected and presetColor:Lerp(Color3.fromRGB(255, 255, 255), 0.22) or presetColor:Lerp(Color3.fromRGB(20, 24, 33), 0.7)
-					textColor = selected and theme.text or presetColor
-					strokeTransparency = selected and 0.08 or 0.45
-				end
-			end
-
-			entry.button.BackgroundColor3 = backgroundColor
-			entry.button.TextColor3 = textColor
-
-			if type(entry.value) == "string" then
-				for _, colorOption in ipairs(colorOptions) do
-					if colorOption.name == entry.value then
-						entry.button.TextColor3 = selected and theme.text or colorOption.color
-						break
-					end
-				end
-			end
-
-			local stroke = entry.button:FindFirstChildOfClass("UIStroke")
-			if stroke then
-				stroke.Transparency = strokeTransparency
-			end
-		end
-	end
-
-	local function createSliderRow(parent, labelText, value, minValue, maxValue)
-		local row = createRow(parent, 52)
-
-		local label = makeLabel(row, labelText, 10, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 6)
-		label.Size = UDim2.new(0, 150, 0, 12)
-
-		local valueLabel = create("TextBox", {
-			AnchorPoint = Vector2.new(1, 0),
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			ClearTextOnFocus = false,
-			Font = Enum.Font.GothamBold,
-			Position = UDim2.new(1, -10, 0, 4),
-			Size = UDim2.new(0, 44, 0, 16),
-			Text = tostring(value),
-			TextColor3 = theme.text,
-			TextSize = 10,
-			Parent = row,
-		})
-		addCorner(valueLabel, 4)
-		addStroke(valueLabel, theme.border, 0.35, 1)
-
-		local bar = create("TextButton", {
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 10, 0, 28),
-			Size = UDim2.new(1, -20, 0, 12),
-			Text = "",
-			Parent = row,
-		})
-		addCorner(bar, 999)
-		addStroke(bar, theme.border, 0.35, 1)
-
-		local fill = create("Frame", {
-			BackgroundColor3 = theme.accent,
-			BorderSizePixel = 0,
-			Size = UDim2.new(0, 0, 1, 0),
-			Parent = bar,
-		})
-		addCorner(fill, 999)
-
-		local knob = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = theme.text,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 0, 0.5, 0),
-			Size = UDim2.new(0, 10, 0, 10),
-			Parent = bar,
-		})
-		addCorner(knob, 999)
-
-		return {
-			bar = bar,
-			fill = fill,
-			knob = knob,
-			valueLabel = valueLabel,
-			isEditing = false,
-			min = minValue,
-			max = maxValue,
-		}
-	end
-
-	local function applySliderVisual(slider, value)
-		value = tonumber(value) or slider.min or 0
-		local alpha = 0
-		if slider.max > slider.min then
-			alpha = (value - slider.min) / (slider.max - slider.min)
-		end
-		alpha = math.clamp(alpha, 0, 1)
-		slider.fill.Size = UDim2.new(alpha, 0, 1, 0)
-		slider.knob.Position = UDim2.new(alpha, 0, 0.5, 0)
-	end
-
-	local function bindSliderValueInput(slider, normalizeValue, commitValue)
-		slider.valueLabel.Focused:Connect(function()
-			slider.isEditing = true
-		end)
-
-		slider.valueLabel:GetPropertyChangedSignal("Text"):Connect(function()
-			if not slider.isEditing then
-				return
-			end
-
-			local typedValue = tonumber(slider.valueLabel.Text)
-			if typedValue == nil then
-				return
-			end
-
-			applySliderVisual(slider, normalizeValue(typedValue))
-		end)
-
-		slider.valueLabel.FocusLost:Connect(function()
-			slider.isEditing = false
-
-			local typedValue = tonumber(slider.valueLabel.Text)
-			if not typedValue then
-				setSliderState(slider, normalizeValue())
-				return
-			end
-
-			local nextValue = normalizeValue(typedValue)
-			commitValue(nextValue)
-			setSliderState(slider, nextValue)
-			task.defer(function()
-				if slider and slider.fill and slider.knob then
-					setSliderState(slider, nextValue)
-				end
-			end)
-		end)
-	end
-
-	local function createSpectateRow(parent)
-		local row = createRow(parent, 30)
-		row.ZIndex = 14
-
-		local label = makeLabel(row, "SPECTATE", 10, theme.muted, Enum.Font.GothamMedium)
-		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(0, 90, 1, 0)
-		label.ZIndex = 14
-
-		local offButton = create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(64, 39, 48),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0.5, 0),
-			Size = UDim2.new(0, 42, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = "OFF",
-			TextColor3 = theme.text,
-			TextSize = 9,
-			ZIndex = 14,
-			Parent = row,
-		})
-		addCorner(offButton, 4)
-		addStroke(offButton, theme.border, 0.35, 1)
-
-		local mainButton = create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -58, 0.5, 0),
-			Size = UDim2.new(0, 120, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = "SELECT",
-			TextColor3 = theme.text,
-			TextSize = 9,
-			ZIndex = 14,
-			Parent = row,
-		})
-		addCorner(mainButton, 4)
-		addStroke(mainButton, theme.border, 0.25, 1)
-
-		local list = create("Frame", {
-			AnchorPoint = Vector2.new(1, 0),
-			BackgroundColor3 = Color3.fromRGB(24, 28, 38),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -58, 1, 6),
-			Size = UDim2.new(0, 154, 0, 176),
-			Visible = false,
-			ZIndex = 20,
-			Parent = row,
-		})
-		addCorner(list, 6)
-		addStroke(list, theme.border, 0.2, 1)
-
-		local searchBox = create("TextBox", {
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			ClearTextOnFocus = false,
-			Font = Enum.Font.GothamMedium,
-			PlaceholderColor3 = theme.muted,
-			PlaceholderText = "Search player",
-			Position = UDim2.new(0, 6, 0, 6),
-			Size = UDim2.new(1, -12, 0, 22),
-			Text = "",
-			TextColor3 = theme.text,
-			TextSize = 10,
-			ZIndex = 21,
-			Parent = list,
-		})
-		addCorner(searchBox, 4)
-		addStroke(searchBox, theme.border, 0.35, 1)
-
-		local scroller = create("ScrollingFrame", {
-			Active = true,
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			Position = UDim2.new(0, 6, 0, 34),
-			ScrollBarImageColor3 = theme.accent,
-			ScrollBarThickness = 4,
-			Size = UDim2.new(1, -12, 1, -40),
-			ZIndex = 21,
-			Parent = list,
-		})
-
-		create("UIListLayout", {
-			Padding = UDim.new(0, 4),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = scroller,
-		})
-
-		return {
-			main = mainButton,
-			off = offButton,
-			list = list,
-			search = searchBox,
-			scroller = scroller,
-		}
-	end
-
-	local function setSliderState(slider, value)
-		applySliderVisual(slider, value)
-		if not slider.isEditing then
-			slider.valueLabel.Text = tostring(tonumber(value) or slider.min or 0)
-		end
-	end
-
-	local function createTabButton(tabName, labelText)
-		local button = create("TextButton", {
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Size = UDim2.new(0, 74, 1, 0),
-			Font = Enum.Font.GothamBold,
-			Text = labelText,
-			TextColor3 = theme.muted,
-			TextSize = 10,
-			Parent = tabBar,
-		})
-		addCorner(button, 999)
-		addStroke(button, theme.border, 0.5, 1)
-		tabButtons[tabName] = button
-		return button
-	end
-
-	local function setActiveTab(tabName)
-		for name, page in pairs(pages) do
-			page.Visible = name == tabName
-		end
-
-		for name, button in pairs(tabButtons) do
-			local selected = name == tabName
-			button.BackgroundColor3 = selected and theme.accentSoft or Color3.fromRGB(35, 40, 53)
-			button.TextColor3 = selected and theme.text or theme.muted
-			local stroke = button:FindFirstChildOfClass("UIStroke")
-			if stroke then
-				stroke.Transparency = selected and 0.15 or 0.5
-			end
-		end
-	end
-
-	local function setToggleState(button, state)
-		button.Text = state and "ON" or "OFF"
-		button.TextColor3 = state and Color3.fromRGB(228, 241, 255) or theme.muted
-		button.BackgroundColor3 = state and theme.accentSoft or Color3.fromRGB(35, 40, 53)
-
-		local stroke = button:FindFirstChildOfClass("UIStroke")
-		if stroke then
-			stroke.Transparency = state and 0.15 or 0.55
-		end
-	end
-
-	return {
-		pages = pages,
-		tabButtons = tabButtons,
-		createNoteRow = createNoteRow,
-		createOptionButtonsRow = createOptionButtonsRow,
-		createPerfRow = createPerfRow,
-		createRow = createRow,
-		createSliderRow = createSliderRow,
-		createSpectateRow = createSpectateRow,
-		createStatusRow = createStatusRow,
-		createTabButton = createTabButton,
-		createToggleRow = createToggleRow,
-		createKeybindRow = createKeybindRow,
-		createCycleRow = createCycleRow,
-		setActiveTab = setActiveTab,
-		setOptionButtonsState = setOptionButtonsState,
-		setSliderState = setSliderState,
-		setToggleState = setToggleState,
-		applySliderVisual = applySliderVisual,
-		bindSliderValueInput = bindSliderValueInput,
-	}
-end
-]==]
-local OVERLAY_TOOLS_MODULE_SOURCE = [==[
-return function(context)
-	local releaseTrack = {
-		latestVersion = "1.4.1",
-		title = "Stability Fixes + UI Cleanup",
-		notes = {
-			"Fixed issues that could make the script stop working properly.",
-			"Improved crosshair and mouse-follow behavior.",
-			"Cleaned up the menu so main pages are easier to use.",
-			"Updated the intro and UI styling to feel more consistent.",
-			"Improved overall stability across the main features.",
-		},
-	}
-
-	local function getViewportSize()
-		local camera = workspace.CurrentCamera
-		return camera and camera.ViewportSize or Vector2.new(1920, 1080)
-	end
-
-	local function getOverlayConfigKeys(overlayId)
-		if overlayId == "miniHud" then
-			return "miniHudOffsetX", "miniHudOffsetY"
-		end
-
-		if overlayId == "keybindPanel" then
-			return "keybindPanelOffsetX", "keybindPanelOffsetY"
-		end
-
-		if overlayId == "targetCard" then
-			return "targetCardOffsetX", "targetCardOffsetY"
-		end
-
-		return nil, nil
-	end
-
-	local function getDefaultOverlayPosition(frame, overlayId)
-		local viewport = getViewportSize()
-		if overlayId == "miniHud" then
-			return viewport.X - frame.AbsoluteSize.X - 16, 16
-		end
-
-		if overlayId == "keybindPanel" then
-			return 16, 98
-		end
-
-		if overlayId == "targetCard" then
-			return viewport.X - frame.AbsoluteSize.X - 16, 180
-		end
-
-		return 16, 16
-	end
-
-	local function clampOverlayPosition(frame, x, y)
-		local viewport = getViewportSize()
-		local maxX = math.max(0, viewport.X - frame.AbsoluteSize.X)
-		local maxY = math.max(0, viewport.Y - frame.AbsoluteSize.Y)
-		return math.clamp(math.floor(x + 0.5), 0, maxX), math.clamp(math.floor(y + 0.5), 0, maxY)
-	end
-
-	local function setOverlayPosition(frame, overlayId, x, y, skipSave)
-		local keyX, keyY = getOverlayConfigKeys(overlayId)
-		if not keyX or not keyY then
-			return
-		end
-
-		x, y = clampOverlayPosition(frame, x, y)
-		frame.AnchorPoint = Vector2.zero
-		frame.Position = UDim2.new(0, x, 0, y)
-		context.config[keyX] = x
-		context.config[keyY] = y
-		if not skipSave then
-			context.saveSettings()
-		end
-	end
-
-	local function makeOverlayDraggable(frame, overlayId)
-		local keyX, keyY = getOverlayConfigKeys(overlayId)
-		if not keyX or not keyY then
-			return
-		end
-
-		if context.config[keyX] == nil or context.config[keyY] == nil or context.config[keyX] < 0 or context.config[keyY] < 0 then
-			local defaultX, defaultY = getDefaultOverlayPosition(frame, overlayId)
-			setOverlayPosition(frame, overlayId, defaultX, defaultY, true)
-		else
-			setOverlayPosition(frame, overlayId, context.config[keyX], context.config[keyY], true)
-		end
-		frame.Active = true
-		frame.Draggable = true
-		frame:GetPropertyChangedSignal("Position"):Connect(function()
-			local position = frame.Position
-			if position.X.Scale ~= 0 or position.Y.Scale ~= 0 then
-				return
-			end
-			if context.config[keyX] ~= position.X.Offset or context.config[keyY] ~= position.Y.Offset then
-				context.config[keyX] = position.X.Offset
-				context.config[keyY] = position.Y.Offset
-				context.saveSettings()
-			end
-		end)
-	end
-
-	local function resetOverlayPosition(frame, overlayId)
-		if not frame then
-			return
-		end
-		local defaultX, defaultY = getDefaultOverlayPosition(frame, overlayId)
-		setOverlayPosition(frame, overlayId, defaultX, defaultY, false)
-	end
-
-	local function compareSemanticVersions(left, right)
-		local function parse(version)
-			local parts = {}
-			for number in tostring(version):gmatch("%d+") do
-				table.insert(parts, tonumber(number) or 0)
-			end
-			return parts
-		end
-
-		local leftParts = parse(left)
-		local rightParts = parse(right)
-		local count = math.max(#leftParts, #rightParts)
-		for index = 1, count do
-			local a = leftParts[index] or 0
-			local b = rightParts[index] or 0
-			if a ~= b then
-				return a < b and -1 or 1
-			end
-		end
-
-		return 0
-	end
-
-	local function buildUpdatePanel(parent)
-		local row = context.createRow(parent, 178)
-		row.BackgroundColor3 = context.theme.panelAlt
-
-		local title = context.makeLabel(row, "UPDATE TRACK", 10, context.theme.accent, Enum.Font.GothamBold)
-		title.Position = UDim2.new(0, 10, 0, 8)
-		title.Size = UDim2.new(0, 112, 0, 12)
-
-		local statusBadge = context.create("TextLabel", {
-			AnchorPoint = Vector2.new(1, 0),
-			BackgroundColor3 = context.theme.accentSoft,
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0, 8),
-			Size = UDim2.new(0, 92, 0, 18),
-			Font = Enum.Font.GothamBold,
-			Text = "CHECKING",
-			TextColor3 = context.theme.text,
-			TextSize = 8,
-			Parent = row,
-		})
-		context.addCorner(statusBadge, 999)
-
-		local current = context.makeLabel(row, "", 9, context.theme.text, Enum.Font.GothamBold)
-		current.Position = UDim2.new(0, 10, 0, 28)
-		current.Size = UDim2.new(0.48, -8, 0, 12)
-
-		local latest = context.makeLabel(row, "", 9, context.theme.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-		latest.Position = UDim2.new(0.52, 0, 0, 28)
-		latest.Size = UDim2.new(0.48, -10, 0, 12)
-
-		local headline = context.makeLabel(row, releaseTrack.title, 10, context.theme.text, Enum.Font.GothamMedium)
-		headline.Position = UDim2.new(0, 10, 0, 46)
-		headline.Size = UDim2.new(1, -120, 0, 14)
-
-		local checkButton = context.create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0),
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
-			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0, 44),
-			Size = UDim2.new(0, 92, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = "CHECK NOW",
-			TextColor3 = context.theme.text,
-			TextSize = 8,
-			Parent = row,
-		})
-		context.addCorner(checkButton, 999)
-		context.addStroke(checkButton, context.theme.border, 0.35, 1)
-
-		local notesScroller = context.create("ScrollingFrame", {
-			Active = true,
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			BackgroundColor3 = Color3.fromRGB(20, 24, 33),
-			BorderSizePixel = 0,
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			Position = UDim2.new(0, 10, 0, 68),
-			ScrollBarImageColor3 = context.theme.accent,
-			ScrollBarThickness = 4,
-			Size = UDim2.new(1, -20, 1, -78),
-			Parent = row,
-		})
-		context.addCorner(notesScroller, 6)
-		context.addStroke(notesScroller, context.theme.border, 0.35, 1)
-
-		context.create("UIPadding", {
-			PaddingLeft = UDim.new(0, 8),
-			PaddingRight = UDim.new(0, 8),
-			PaddingTop = UDim.new(0, 8),
-			PaddingBottom = UDim.new(0, 8),
-			Parent = notesScroller,
-		})
-
-		context.create("UIListLayout", {
-			Padding = UDim.new(0, 4),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = notesScroller,
-		})
-
-		local notes = {}
-		for index = 1, #releaseTrack.notes do
-			local note = context.makeLabel(notesScroller, "", 9, context.theme.muted, Enum.Font.GothamMedium)
-			note.AutomaticSize = Enum.AutomaticSize.Y
-			note.Size = UDim2.new(1, 0, 0, 0)
-			note.TextWrapped = true
-			notes[index] = note
-		end
-
-		return {
-			row = row,
-			status = statusBadge,
-			current = current,
-			latest = latest,
-			headline = headline,
-			check = checkButton,
-			scroller = notesScroller,
-			notes = notes,
-		}
-	end
-
-	local function updateReleasePanel(panel)
-		if not panel or not panel.status then
-			return
-		end
-
-		local comparison = compareSemanticVersions(context.config.version, releaseTrack.latestVersion)
-		local upToDate = comparison >= 0
-		panel.current.Text = string.format("CURRENT  v%s", context.config.version)
-		panel.latest.Text = string.format("LATEST  v%s", releaseTrack.latestVersion)
-		panel.headline.Text = releaseTrack.title
-		panel.status.Text = upToDate and "UP TO DATE" or "UPDATE READY"
-		panel.status.BackgroundColor3 = upToDate and context.theme.accentSoft or Color3.fromRGB(92, 76, 28)
-		panel.status.TextColor3 = context.theme.text
-
-		for index, note in ipairs(panel.notes or {}) do
-			note.Text = releaseTrack.notes[index] and ("- " .. releaseTrack.notes[index]) or ""
-		end
-	end
-
-	local function bindUpdatePanel(panel)
-		if not panel or not panel.check then
-			return
-		end
-
-		panel.check.MouseButton1Click:Connect(function()
-			updateReleasePanel(panel)
-			if compareSemanticVersions(context.config.version, releaseTrack.latestVersion) >= 0 then
-				context.showToast("Update Checker", string.format("You're on v%s", context.config.version), context.theme.accent)
-			else
-				context.showToast("Update Checker", string.format("Latest is v%s", releaseTrack.latestVersion), context.theme.focus)
-			end
-		end)
-	end
-
-	return {
-		buildUpdatePanel = buildUpdatePanel,
-		bindUpdatePanel = bindUpdatePanel,
-		makeOverlayDraggable = makeOverlayDraggable,
-		resetOverlayPosition = resetOverlayPosition,
-		updateReleasePanel = updateReleasePanel,
-	}
-end
-]==]
-local PLAYER_ESP_MODULE_SOURCE = [==[
-return function(context)
-	local CONFIG = context.CONFIG
-	local LOCAL_PLAYER = context.LOCAL_PLAYER
-	local THEME = context.THEME
-	local DEV_TAG_DISTANCE = context.DEV_TAG_DISTANCE
-	local getEspEntry = context.getEspEntry
-	local clearEntry = context.clearEntry
-	local shouldTrackPlayer = context.shouldTrackPlayer
-	local getCharacterRoot = context.getCharacterRoot
-	local getEspColor = context.getEspColor
-	local isPlayerVisible = context.isPlayerVisible
-	local getDisplayColor = context.getDisplayColor
-	local getDistanceFade = context.getDistanceFade
-	local isFocusedTarget = context.isFocusedTarget
-	local isDevPlayer = context.isDevPlayer
-	local getRainbowColor = context.getRainbowColor
-	local getTargetThreatData = context.getTargetThreatData
-	local getTracerColor = context.getTracerColor
-	local getCamera = context.getCamera
-	local getEffectiveBoxMode = context.getEffectiveBoxMode
-	local ensureHighlight = context.ensureHighlight
-	local updateBoxEsp = context.updateBoxEsp
-	local updateSkeletonEsp = context.updateSkeletonEsp
-	local updateLookDirectionEsp = context.updateLookDirectionEsp
-	local updateBillboardEsp = context.updateBillboardEsp
-	local updateTracerEsp = context.updateTracerEsp
-	local updateHeadDotEsp = context.updateHeadDotEsp
-
-	local function updatePlayerEsp(player, precomputed)
-		local entry = getEspEntry(player)
-
-		if not CONFIG.enabled or not shouldTrackPlayer(player) then
-			clearEntry(entry)
-			return
-		end
-
-		local character = player.Character
-		local root = character and getCharacterRoot(character)
-		local localCharacter = LOCAL_PLAYER.Character
-		local localRoot = localCharacter and getCharacterRoot(localCharacter)
-
-		if not character or not root or not localRoot then
-			clearEntry(entry)
-			return
-		end
-
-		local distance = precomputed and precomputed.distance or (root.Position - localRoot.Position).Magnitude
-		if distance > CONFIG.maxDistance then
-			clearEntry(entry)
-			return
-		end
-
-		local espColor = getEspColor(player)
-		local visible = precomputed and precomputed.visible
-		if visible == nil then
-			visible = isPlayerVisible(character, root)
-		end
-		local displayColor = getDisplayColor(espColor, visible)
-		local distanceFade = getDistanceFade(distance)
-		local focusTarget = isFocusedTarget(player)
-		local showDevTag = isDevPlayer(player) and distance <= DEV_TAG_DISTANCE
-		local devRainbowColor = showDevTag and getRainbowColor() or nil
-		local telemetry = precomputed and precomputed.telemetry or getTargetThreatData(player, character, root, localRoot, visible)
-		local tracerColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or getTracerColor(player)))
-		local camera = getCamera()
-		local effectiveBoxMode = getEffectiveBoxMode()
-		local outlineColor = showDevTag and devRainbowColor or (focusTarget and THEME.focus or (CONFIG.visibilityCheck and displayColor or espColor))
-		local fillColor = showDevTag and devRainbowColor or espColor
-
-		local highlight = ensureHighlight(entry, character)
-		highlight.FillColor = fillColor
-		if showDevTag then
-			local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
-			highlight.FillTransparency = 0.44 - (pulse * 0.14)
-			highlight.OutlineTransparency = 0.02 + (pulse * 0.08)
-		else
-			if effectiveBoxMode == "Chams" then
-				highlight.FillTransparency = math.clamp(CONFIG.fillTransparency + ((1 - distanceFade) * 0.45), 0, 1)
-				highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + ((1 - distanceFade) * 0.35), 0, 1)
-			elseif effectiveBoxMode == "Flat Chams" then
-				highlight.FillTransparency = math.clamp(math.max(0.05, CONFIG.fillTransparency * 0.65) + ((1 - distanceFade) * 0.3), 0, 1)
-				highlight.OutlineTransparency = 1
-			elseif effectiveBoxMode == "Outline Chams" then
-				highlight.FillTransparency = 1
-				highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + ((1 - distanceFade) * 0.18), 0, 1)
-			elseif effectiveBoxMode == "Split Chams" then
-				if visible then
-					highlight.FillTransparency = math.clamp(CONFIG.fillTransparency + 0.18 + ((1 - distanceFade) * 0.24), 0, 1)
-					highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency * 0.55, 0, 1)
-				else
-					highlight.FillTransparency = math.clamp(math.max(0.08, CONFIG.fillTransparency * 0.72), 0, 1)
-					highlight.OutlineTransparency = math.clamp(CONFIG.outlineTransparency + 0.22 + ((1 - distanceFade) * 0.18), 0, 1)
-				end
-			else
-				highlight.FillTransparency = 1
-				highlight.OutlineTransparency = 1
-			end
-		end
-		highlight.OutlineColor = outlineColor
-
-		if camera then
-			updateBoxEsp(entry, camera, character, outlineColor, fillColor)
-			updateSkeletonEsp(entry, camera, character, outlineColor)
-			updateLookDirectionEsp(entry, camera, character, root, outlineColor)
-		end
-
-		updateBillboardEsp(entry, player, character, distance, focusTarget, showDevTag, devRainbowColor, espColor, distanceFade)
-		updateTracerEsp(entry, root, camera, tracerColor, focusTarget, distance, distanceFade)
-		updateHeadDotEsp(entry, character, camera, distanceFade, outlineColor, showDevTag, devRainbowColor)
-	end
-
-	return {
-		updatePlayerEsp = updatePlayerEsp,
-	}
-end
-]==]
+local KEYBINDS_MODULE_SOURCE = nil
+local UI_FRAMEWORK_MODULE_SOURCE = nil
+local TRACKING_RUNTIME_MODULE_SOURCE = nil
+local VIEW_RUNTIME_MODULE_SOURCE = nil
+local PERFORMANCE_RUNTIME_MODULE_SOURCE = nil
+local STATUS_RUNTIME_MODULE_SOURCE = nil
+local RUNTIME_HOOKS_MODULE_SOURCE = nil
+local OVERLAY_TOOLS_MODULE_SOURCE = nil
+local PLAYER_ESP_MODULE_SOURCE = nil
+local DRAWING_ESP_MODULE_SOURCE = nil
+local INTRO_ANIMATION_MODULE_SOURCE = nil
 
 local function canUseFileApi()
 	return type(isfile) == "function" and type(readfile) == "function" and type(writefile) == "function"
@@ -1984,13 +404,81 @@ local function requireLocalModule(modulePath, fallbackSource)
 	end
 
 	local source = fallbackSource
+	local loadErrors = {}
+	local fileName = tostring(modulePath):match("[^\\/]+$")
+
 	if type(readfile) == "function" then
-		pcall(function()
-			source = readfile(modulePath)
+		local candidates = {}
+		local seen = {}
+
+		local function addCandidate(path)
+			if type(path) == "string" and path ~= "" and not seen[path] then
+				seen[path] = true
+				table.insert(candidates, path)
+			end
+		end
+
+		addCandidate(modulePath)
+
+		local relativeModulePath = tostring(modulePath):match("(esp_modules[\\/].+)$")
+		if relativeModulePath then
+			local slashPath = relativeModulePath:gsub("\\", "/")
+			local backslashPath = relativeModulePath:gsub("/", "\\")
+			addCandidate(slashPath)
+			addCandidate("./" .. slashPath)
+			addCandidate(backslashPath)
+			addCandidate(".\\" .. backslashPath)
+		end
+
+		if fileName then
+			local customModuleDir = SHARED_ENV and SHARED_ENV.__VYRS_ESP_MODULE_DIR
+			if type(customModuleDir) == "string" and customModuleDir ~= "" then
+				local normalizedDir = customModuleDir:gsub("[\\/]+$", "")
+				addCandidate(normalizedDir .. "/" .. fileName)
+				addCandidate(normalizedDir .. "\\" .. fileName)
+			end
+
+			addCandidate("esp_modules/" .. fileName)
+			addCandidate("esp_modules\\" .. fileName)
+			addCandidate("ESP/esp_modules/" .. fileName)
+			addCandidate("ESP\\esp_modules\\" .. fileName)
+		end
+
+		for _, candidate in ipairs(candidates) do
+			local success, result = pcall(function()
+				return readfile(candidate)
+			end)
+			if success and type(result) == "string" and result ~= "" then
+				source = result
+				break
+			elseif not success then
+				table.insert(loadErrors, string.format("%s: %s", candidate, tostring(result)))
+			end
+		end
+	end
+
+	if (type(source) ~= "string" or source == "") and fileName and type(game.HttpGet) == "function" then
+		local baseUrl = SHARED_ENV and SHARED_ENV.__VYRS_ESP_MODULE_BASE_URL
+		if type(baseUrl) ~= "string" or baseUrl == "" then
+			baseUrl = "https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp_modules"
+		end
+		baseUrl = baseUrl:gsub("/+$", "")
+
+		local url = baseUrl .. "/" .. fileName
+		local success, result = pcall(function()
+			return game:HttpGet(url)
 		end)
+		if success and type(result) == "string" and result ~= "" then
+			source = result
+		else
+			table.insert(loadErrors, string.format("%s: %s", url, tostring(result)))
+		end
 	end
 
 	if type(source) ~= "string" or source == "" then
+		if #loadErrors > 0 then
+			warn("[0xVyrs] Module read failed: " .. table.concat(loadErrors, " | "))
+		end
 		return nil
 	end
 
@@ -2003,6 +491,7 @@ local function requireLocalModule(modulePath, fallbackSource)
 		return result
 	end
 
+	warn(string.format("[0xVyrs] Module compile failed for %s: %s", tostring(modulePath), tostring(result)))
 	return nil
 end
 
@@ -2259,6 +748,11 @@ local gui = create("ScreenGui", {
 	Parent = CoreGui,
 })
 gui:SetAttribute("ActiveToken", SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN)
+
+create("UIScale", {
+	Scale = 0.94,
+	Parent = gui,
+})
 
 local watermark = create("Frame", {
 	BackgroundColor3 = Color3.fromRGB(18, 22, 32),
@@ -2600,1911 +1094,6 @@ miniHudLabels.utility.showKillText = function(text)
 	end)
 end
 
-local INTRO_ANIMATION_MODULE_SOURCE = [==[
-return function(context)
-	local create = context.create
-	local addCorner = context.addCorner
-	local addStroke = context.addStroke
-	local makeLabel = context.makeLabel
-	local TweenService = context.TweenService
-	local RunService = context.RunService
-	local gui = context.gui
-	local CONFIG = context.CONFIG
-	local THEME = context.THEME
-
-	local palette = {
-		bg0 = Color3.fromRGB(6, 9, 14),
-		bg1 = THEME.window:Lerp(Color3.fromRGB(8, 10, 16), 0.35),
-		bg2 = THEME.header:Lerp(Color3.fromRGB(18, 24, 34), 0.2),
-		header = THEME.header,
-		panel = THEME.panel,
-		panelAlt = THEME.panelAlt,
-		border = THEME.border,
-		text = THEME.text,
-		muted = THEME.muted,
-		accent = THEME.accent,
-		accentSoft = THEME.accentSoft,
-		focus = THEME.focus,
-		core = THEME.text:Lerp(THEME.accent, 0.18),
-		coreGlow = THEME.accent:Lerp(THEME.text, 0.34),
-		beamHot = THEME.accent:Lerp(THEME.text, 0.62),
-		beamCool = THEME.accentSoft:Lerp(THEME.accent, 0.45),
-		ringA = THEME.accent:Lerp(THEME.border, 0.28),
-		ringB = THEME.accent:Lerp(THEME.focus, 0.18),
-		dustA = THEME.accent:Lerp(THEME.text, 0.22),
-		dustB = THEME.muted:Lerp(THEME.accent, 0.32),
-	}
-
-local intro = {}
-intro.runtime = {}
-intro.animatables = {}
-intro.orbitalDots = {}
-intro.beamTrails = {}
-intro.coreSpokes = {}
-intro.dustMotes = {}
-intro.nebulaClouds = {}
-intro.ringArcs = {}
-intro.beamFragments = {}
-intro.titleChars = {}
-
-local function introClamp(value, minValue, maxValue)
-	return math.max(minValue, math.min(maxValue, value))
-end
-
-local function introLerp(a, b, alpha)
-	return a + ((b - a) * alpha)
-end
-
-local function introEaseOutQuad(alpha)
-	alpha = introClamp(alpha, 0, 1)
-	return 1 - ((1 - alpha) * (1 - alpha))
-end
-
-local function introPulse(speed, phase)
-	return 0.5 + (math.sin((tick() * speed) + (phase or 0)) * 0.5)
-end
-
-local function createIntroCapsule(parent, width, height, color, zIndex)
-	local capsule = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, width, 0, height),
-		ZIndex = zIndex,
-		Parent = parent,
-	})
-	addCorner(capsule, 999)
-	return capsule
-end
-
-local function createIntroGlowOrb(parent, size, color, zIndex)
-	return create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, size, 0, size),
-		ZIndex = zIndex,
-		Parent = parent,
-	})
-end
-
-local function createIntroGradientCapsule(parent, width, height, colorA, colorB, transparencyKeys, rotation, zIndex)
-	local capsule = createIntroCapsule(parent, width, height, colorA, zIndex)
-	create("UIGradient", {
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, colorA),
-			ColorSequenceKeypoint.new(0.5, colorB),
-			ColorSequenceKeypoint.new(1, colorA),
-		}),
-		Transparency = NumberSequence.new(transparencyKeys),
-		Rotation = rotation or 0,
-		Parent = capsule,
-	})
-	return capsule
-end
-
-local function createIntroDot(parent, size, color, zIndex)
-	local dot = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, size, 0, size),
-		ZIndex = zIndex,
-		Parent = parent,
-	})
-	addCorner(dot, 999)
-	return dot
-end
-
-local function createIntroCrossStar(parent, size, color, zIndex)
-	local main = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, size, 0, 2),
-		ZIndex = zIndex,
-		Parent = parent,
-	})
-	addCorner(main, 999)
-	local cross = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, 2, 0, size),
-		ZIndex = zIndex,
-		Parent = main,
-	})
-	addCorner(cross, 999)
-	return {
-		main = main,
-		cross = cross,
-		size = size,
-	}
-end
-
-local function setIntroPairTransparency(pair, value)
-	if not pair then
-		return
-	end
-	if pair.main then
-		pair.main.BackgroundTransparency = value
-	end
-	if pair.cross then
-		pair.cross.BackgroundTransparency = value
-	end
-end
-
-local function setIntroLabelGradient(label, colorA, colorB, offset)
-	local gradient = create("UIGradient", {
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, colorA),
-			ColorSequenceKeypoint.new(0.55, colorB),
-			ColorSequenceKeypoint.new(1, colorA),
-		}),
-		Offset = offset or Vector2.new(0, 0),
-		Rotation = 0,
-		Parent = label,
-	})
-	return gradient
-end
-
-intro.overlay = create("Frame", {
-	BackgroundColor3 = palette.bg0,
-	BackgroundTransparency = 0,
-	BorderSizePixel = 0,
-	Size = UDim2.fromScale(1, 1),
-	ZIndex = 20,
-	Parent = gui,
-})
-
-intro.backdrop = create("Frame", {
-	BackgroundColor3 = palette.bg1,
-	BorderSizePixel = 0,
-	Size = UDim2.fromScale(1, 1),
-	ZIndex = 21,
-	Parent = intro.overlay,
-})
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.bg0),
-		ColorSequenceKeypoint.new(0.38, palette.bg1),
-		ColorSequenceKeypoint.new(0.7, palette.bg2),
-		ColorSequenceKeypoint.new(1, palette.bg0),
-	}),
-	Rotation = 0,
-	Parent = intro.backdrop,
-})
-
-intro.flashWash = create("Frame", {
-	BackgroundColor3 = palette.core,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Size = UDim2.fromScale(1, 1),
-	ZIndex = 29,
-	Parent = intro.overlay,
-})
-
-intro.topLetterbox = create("Frame", {
-	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 0),
-	Size = UDim2.new(1, 0, 0, 86),
-	ZIndex = 28,
-	Parent = intro.overlay,
-})
-
-intro.bottomLetterbox = create("Frame", {
-	AnchorPoint = Vector2.new(0, 1),
-	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 1, 0),
-	Size = UDim2.new(1, 0, 0, 86),
-	ZIndex = 28,
-	Parent = intro.overlay,
-})
-
-intro.vignette = create("ImageLabel", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	Image = "rbxassetid://5028857084",
-	ImageColor3 = palette.bg0:Lerp(palette.accentSoft, 0.12),
-	ImageTransparency = 0.18,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	ScaleType = Enum.ScaleType.Stretch,
-	Size = UDim2.new(1.2, 0, 1.2, 0),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-
-intro.nebulaLayer = create("Frame", {
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Size = UDim2.fromScale(1, 1),
-	ZIndex = 21,
-	Parent = intro.overlay,
-})
-
-for _, cloudInfo in ipairs({
-	{ pos = UDim2.new(0.28, 0, 0.38, 0), size = 420, color = palette.accentSoft:Lerp(palette.accent, 0.35), alpha = 0.88 },
-	{ pos = UDim2.new(0.72, 0, 0.36, 0), size = 510, color = palette.accent:Lerp(palette.text, 0.12), alpha = 0.9 },
-	{ pos = UDim2.new(0.52, 0, 0.58, 0), size = 640, color = palette.panelAlt:Lerp(palette.accent, 0.34), alpha = 0.88 },
-	{ pos = UDim2.new(0.18, 0, 0.68, 0), size = 340, color = palette.panel:Lerp(palette.accentSoft, 0.42), alpha = 0.92 },
-	{ pos = UDim2.new(0.82, 0, 0.66, 0), size = 360, color = palette.border:Lerp(palette.accentSoft, 0.4), alpha = 0.92 },
-}) do
-	local cloud = createIntroGlowOrb(intro.nebulaLayer, cloudInfo.size, cloudInfo.color, 21)
-	addCorner(cloud, 999)
-	cloud.Position = cloudInfo.pos
-	cloud.BackgroundTransparency = cloudInfo.alpha
-	table.insert(intro.nebulaClouds, {
-		frame = cloud,
-		home = cloudInfo.pos,
-		size = cloudInfo.size,
-		alpha = cloudInfo.alpha,
-	})
-end
-
-intro.coreGlow = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.core,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 120, 0, 120),
-	ZIndex = 24,
-	Parent = intro.overlay,
-})
-addCorner(intro.coreGlow, 999)
-
-intro.auraGlow = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.coreGlow,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 320, 0, 320),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-addCorner(intro.auraGlow, 999)
-
-intro.haloInner = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 180, 0, 180),
-	ZIndex = 24,
-	Parent = intro.overlay,
-})
-addCorner(intro.haloInner, 999)
-addStroke(intro.haloInner, palette.ringB, 1, 2)
-
-intro.haloOuter = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 260, 0, 260),
-	ZIndex = 23,
-	Parent = intro.overlay,
-})
-addCorner(intro.haloOuter, 999)
-addStroke(intro.haloOuter, palette.ringA, 1, 1)
-
-intro.haloGlyph = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 560, 0, 560),
-	ZIndex = 24,
-	Parent = intro.overlay,
-})
-
-intro.haloMid = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 340, 0, 340),
-	ZIndex = 23,
-	Parent = intro.overlay,
-})
-addCorner(intro.haloMid, 999)
-addStroke(intro.haloMid, palette.border:Lerp(palette.accent, 0.44), 1, 1)
-
-intro.hudFrame = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.panelAlt,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 10),
-	Size = UDim2.new(0, 760, 0, 232),
-	ZIndex = 23,
-	Parent = intro.overlay,
-})
-addCorner(intro.hudFrame, 14)
-addStroke(intro.hudFrame, palette.border, 1, 1)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.panelAlt),
-		ColorSequenceKeypoint.new(0.5, palette.panel),
-		ColorSequenceKeypoint.new(1, palette.panelAlt),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.16),
-		NumberSequenceKeypoint.new(0.5, 0.34),
-		NumberSequenceKeypoint.new(1, 0.16),
-	}),
-	Rotation = 0,
-	Parent = intro.hudFrame,
-})
-
-intro.windowShell = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.panel,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 8),
-	Size = UDim2.new(0, 620, 0, 196),
-	ZIndex = 24,
-	Parent = intro.overlay,
-})
-addCorner(intro.windowShell, 12)
-addStroke(intro.windowShell, palette.border, 1, 1)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.header),
-		ColorSequenceKeypoint.new(0.24, palette.panel),
-		ColorSequenceKeypoint.new(1, palette.panelAlt),
-	}),
-	Rotation = 90,
-	Parent = intro.windowShell,
-})
-
-intro.windowTopBar = create("Frame", {
-	BackgroundColor3 = palette.header,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 44),
-	ZIndex = 25,
-	Parent = intro.windowShell,
-})
-addCorner(intro.windowTopBar, 12)
-
-intro.windowTopLine = create("Frame", {
-	BackgroundColor3 = palette.accent,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 0),
-	Size = UDim2.new(1, 0, 0, 3),
-	ZIndex = 26,
-	Parent = intro.windowTopBar,
-})
-
-intro.windowTitle = makeLabel(intro.windowTopBar, CONFIG.panelTitle, 16, palette.text, Enum.Font.GothamBlack)
-intro.windowTitle.Position = UDim2.new(0, 14, 0, 7)
-intro.windowTitle.Size = UDim2.new(0, 180, 0, 18)
-intro.windowTitle.TextTransparency = 1
-intro.windowTitle.ZIndex = 26
-
-intro.windowSub = makeLabel(intro.windowTopBar, "TACTICAL ESP SUITE", 8, palette.accent, Enum.Font.GothamBold)
-intro.windowSub.Position = UDim2.new(0, 15, 0, 24)
-intro.windowSub.Size = UDim2.new(0, 180, 0, 12)
-intro.windowSub.TextTransparency = 1
-intro.windowSub.ZIndex = 26
-
-intro.windowBadge = create("TextLabel", {
-	AnchorPoint = Vector2.new(1, 0),
-	BackgroundColor3 = palette.accentSoft,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(1, -14, 0, 11),
-	Size = UDim2.new(0, 64, 0, 18),
-	Font = Enum.Font.GothamBold,
-	Text = "LIVE",
-	TextColor3 = palette.text,
-	TextSize = 8,
-	ZIndex = 26,
-	Parent = intro.windowTopBar,
-})
-addCorner(intro.windowBadge, 999)
-
-intro.windowBodyDivider = create("Frame", {
-	BackgroundColor3 = palette.border,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 14, 0, 52),
-	Size = UDim2.new(1, -28, 0, 1),
-	ZIndex = 25,
-	Parent = intro.windowShell,
-})
-
-intro.windowBodyChip = create("TextLabel", {
-	BackgroundColor3 = palette.accentSoft,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -16, 0, 66),
-	Size = UDim2.new(0, 112, 0, 18),
-	Font = Enum.Font.GothamBold,
-	Text = "SYSTEM ONLINE",
-	TextColor3 = palette.text,
-	TextSize = 8,
-	ZIndex = 26,
-	Parent = intro.windowShell,
-})
-addCorner(intro.windowBodyChip, 999)
-
-intro.hudSweep = create("Frame", {
-	AnchorPoint = Vector2.new(0, 0.5),
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, -220, 0.5, 0),
-	Size = UDim2.new(0, 220, 0, 2),
-	ZIndex = 24,
-	Parent = intro.hudFrame,
-})
-addCorner(intro.hudSweep, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.beamCool),
-		ColorSequenceKeypoint.new(0.5, palette.beamHot),
-		ColorSequenceKeypoint.new(1, palette.beamCool),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.22, 0.7),
-		NumberSequenceKeypoint.new(0.5, 0.08),
-		NumberSequenceKeypoint.new(0.78, 0.7),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Rotation = 0,
-	Parent = intro.hudSweep,
-})
-
-intro.spokeLayer = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 440, 0, 440),
-	ZIndex = 24,
-	Parent = intro.overlay,
-})
-
-for index = 1, 14 do
-	local spoke = createIntroGradientCapsule(
-		intro.spokeLayer,
-		132 + ((index % 3) * 28),
-		2 + (index % 2),
-		palette.beamCool,
-		palette.beamHot,
-		{
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.35, 0.84),
-			NumberSequenceKeypoint.new(0.5, 0.16),
-			NumberSequenceKeypoint.new(0.65, 0.84),
-			NumberSequenceKeypoint.new(1, 1),
-		},
-		0,
-		24
-	)
-	spoke.Rotation = ((index - 1) / 14) * 180
-	table.insert(intro.coreSpokes, {
-		frame = spoke,
-		baseRotation = spoke.Rotation,
-		baseSize = spoke.Size,
-		alpha = 0.62 + ((index % 4) * 0.06),
-	})
-end
-
-intro.ringArcLayer = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 700, 0, 700),
-	ZIndex = 23,
-	Parent = intro.overlay,
-})
-
-for _, arcInfo in ipairs({
-	{ count = 12, radius = 252, width = 44, color = palette.ringA, thickness = 2 },
-	{ count = 10, radius = 184, width = 28, color = palette.ringB, thickness = 2 },
-}) do
-	for index = 1, arcInfo.count do
-		local angle = ((index - 1) / arcInfo.count) * 360
-		local radians = math.rad(angle)
-		local x = math.cos(radians) * arcInfo.radius
-		local y = math.sin(radians) * arcInfo.radius
-		local arc = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = arcInfo.color,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, x, 0.5, y),
-			Rotation = angle + 90,
-			Size = UDim2.new(0, arcInfo.width, 0, arcInfo.thickness),
-			ZIndex = 23,
-			Parent = intro.ringArcLayer,
-		})
-		addCorner(arc, 999)
-		table.insert(intro.ringArcs, {
-			frame = arc,
-			angle = angle,
-			radius = arcInfo.radius,
-			width = arcInfo.width,
-		})
-	end
-end
-
-intro.orbitLayer = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 760, 0, 760),
-	ZIndex = 24,
-	Parent = intro.overlay,
-})
-
-for index = 1, 28 do
-	local dot = createIntroDot(intro.orbitLayer, (index % 4 == 0) and 8 or 5, (index % 3 == 0) and palette.beamHot or palette.accent, 24)
-	table.insert(intro.orbitalDots, {
-		frame = dot,
-		radius = 210 + ((index % 3) * 46),
-		angle = ((index - 1) / 28) * 360,
-		speed = 9 + (index % 5),
-		alpha = 0.2 + ((index % 5) * 0.08),
-	})
-end
-
-intro.crossVertical = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 4, 0, 460),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-addCorner(intro.crossVertical, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.beamCool),
-		ColorSequenceKeypoint.new(0.5, palette.beamHot),
-		ColorSequenceKeypoint.new(1, palette.beamCool),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.22, 0.82),
-		NumberSequenceKeypoint.new(0.5, 0.18),
-		NumberSequenceKeypoint.new(0.78, 0.82),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Rotation = 90,
-	Parent = intro.crossVertical,
-})
-
-intro.crossHorizontal = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 620, 0, 4),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-addCorner(intro.crossHorizontal, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.beamCool),
-		ColorSequenceKeypoint.new(0.5, palette.beamHot),
-		ColorSequenceKeypoint.new(1, palette.beamCool),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.18, 0.86),
-		NumberSequenceKeypoint.new(0.5, 0.2),
-		NumberSequenceKeypoint.new(0.82, 0.86),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Rotation = 0,
-	Parent = intro.crossHorizontal,
-})
-
-intro.diagA = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Rotation = 38,
-	Size = UDim2.new(0, 1100, 0, 10),
-	ZIndex = 23,
-	Parent = intro.overlay,
-})
-addCorner(intro.diagA, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.beamCool),
-		ColorSequenceKeypoint.new(0.5, palette.beamHot),
-		ColorSequenceKeypoint.new(1, palette.beamCool),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.2, 0.8),
-		NumberSequenceKeypoint.new(0.5, 0.1),
-		NumberSequenceKeypoint.new(0.8, 0.8),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Parent = intro.diagA,
-})
-
-intro.diagB = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.accent,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Rotation = -27,
-	Size = UDim2.new(0, 1180, 0, 12),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-addCorner(intro.diagB, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.accent),
-		ColorSequenceKeypoint.new(0.5, palette.beamHot),
-		ColorSequenceKeypoint.new(1, palette.accent),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.18, 0.86),
-		NumberSequenceKeypoint.new(0.5, 0.22),
-		NumberSequenceKeypoint.new(0.82, 0.86),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Parent = intro.diagB,
-})
-
-intro.beamAuraA = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Rotation = 40,
-	Size = UDim2.new(0, 1320, 0, 84),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-addCorner(intro.beamAuraA, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.beamCool),
-		ColorSequenceKeypoint.new(0.5, palette.beamHot),
-		ColorSequenceKeypoint.new(1, palette.beamCool),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.18, 0.92),
-		NumberSequenceKeypoint.new(0.5, 0.48),
-		NumberSequenceKeypoint.new(0.82, 0.92),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Parent = intro.beamAuraA,
-})
-
-intro.beamAuraB = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = palette.beamCool,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Rotation = -24,
-	Size = UDim2.new(0, 1380, 0, 92),
-	ZIndex = 21,
-	Parent = intro.overlay,
-})
-addCorner(intro.beamAuraB, 999)
-create("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, palette.beamCool),
-		ColorSequenceKeypoint.new(0.5, palette.accent),
-		ColorSequenceKeypoint.new(1, palette.beamCool),
-	}),
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.16, 0.94),
-		NumberSequenceKeypoint.new(0.5, 0.52),
-		NumberSequenceKeypoint.new(0.84, 0.94),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-	Parent = intro.beamAuraB,
-})
-
-intro.beamTrailLayer = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 1600, 0, 900),
-	ZIndex = 22,
-	Parent = intro.overlay,
-})
-
-for _, trailInfo in ipairs({
-	{ rotation = 38, width = 1180, height = 26, colorA = palette.beamHot, colorB = palette.text, alpha = 0.72 },
-	{ rotation = 40, width = 1120, height = 12, colorA = palette.beamCool, colorB = palette.beamHot, alpha = 0.42 },
-	{ rotation = -24, width = 1260, height = 32, colorA = palette.accent, colorB = palette.beamHot, alpha = 0.76 },
-	{ rotation = -27, width = 1140, height = 14, colorA = palette.ringB, colorB = palette.text, alpha = 0.5 },
-}) do
-	local trail = createIntroGradientCapsule(
-		intro.beamTrailLayer,
-		trailInfo.width,
-		trailInfo.height,
-		trailInfo.colorA,
-		trailInfo.colorB,
-		{
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.16, 0.94),
-			NumberSequenceKeypoint.new(0.5, trailInfo.alpha),
-			NumberSequenceKeypoint.new(0.84, 0.94),
-			NumberSequenceKeypoint.new(1, 1),
-		},
-		0,
-		22
-	)
-	trail.Rotation = trailInfo.rotation
-	table.insert(intro.beamTrails, {
-		frame = trail,
-		baseRotation = trailInfo.rotation,
-		baseSize = trail.Size,
-		alpha = trailInfo.alpha,
-	})
-end
-
-for _, fragmentInfo in ipairs({
-	{ angle = 18, distance = 180, length = 142, color = palette.beamHot, thickness = 2 },
-	{ angle = 84, distance = 166, length = 106, color = palette.ringB, thickness = 2 },
-	{ angle = 122, distance = 132, length = 78, color = palette.text, thickness = 1 },
-	{ angle = 198, distance = 136, length = 88, color = palette.border, thickness = 1 },
-	{ angle = 266, distance = 154, length = 126, color = palette.accent, thickness = 2 },
-	{ angle = 332, distance = 128, length = 96, color = palette.text, thickness = 1 },
-	{ angle = 354, distance = 198, length = 112, color = palette.beamCool, thickness = 1 },
-	{ angle = 48, distance = 122, length = 86, color = palette.beamHot, thickness = 1 },
-	{ angle = 146, distance = 168, length = 94, color = palette.accent, thickness = 1 },
-	{ angle = 288, distance = 134, length = 92, color = palette.border, thickness = 1 },
-}) do
-	local radians = math.rad(fragmentInfo.angle)
-	local x = math.cos(radians) * fragmentInfo.distance
-	local y = math.sin(radians) * fragmentInfo.distance
-	local fragment = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = fragmentInfo.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, x, 0.5, y),
-		Rotation = fragmentInfo.angle,
-		Size = UDim2.new(0, fragmentInfo.length, 0, fragmentInfo.thickness),
-		ZIndex = 24,
-		Parent = intro.overlay,
-	})
-	addCorner(fragment, 999)
-	table.insert(intro.beamFragments, {
-		frame = fragment,
-		angle = fragmentInfo.angle,
-		distance = fragmentInfo.distance,
-		home = UDim2.new(0.5, x, 0.5, y),
-		alpha = 0.24,
-	})
-end
-
-intro.sound = create("Sound", {
-	Name = "IntroHit",
-	SoundId = "rbxassetid://1839701476",
-	Volume = 2.2,
-	PlaybackSpeed = 1,
-	RollOffMaxDistance = 100,
-	Parent = gui,
-})
-
-intro.kicker = makeLabel(intro.overlay, "Adaptive overlays and combat info", 10, palette.muted, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
-intro.kicker.AnchorPoint = Vector2.new(0.5, 0)
-intro.kicker.Position = UDim2.new(0.5, 0, 0.5, -54)
-intro.kicker.Size = UDim2.new(0, 420, 0, 16)
-intro.kicker.TextTransparency = 1
-intro.kicker.ZIndex = 27
-
-intro.titleShadow = makeLabel(intro.overlay, CONFIG.panelTitle, 42, palette.accentSoft:Lerp(palette.accent, 0.35), Enum.Font.GothamBlack, Enum.TextXAlignment.Center)
-intro.titleShadow.AnchorPoint = Vector2.new(0.5, 0.5)
-intro.titleShadow.Position = UDim2.new(0.5, 3, 0.5, -4)
-intro.titleShadow.Size = UDim2.new(0, 760, 0, 60)
-intro.titleShadow.TextTransparency = 1
-intro.titleShadow.ZIndex = 27
-
-intro.title = makeLabel(intro.overlay, CONFIG.panelTitle, 42, palette.text, Enum.Font.GothamBlack, Enum.TextXAlignment.Center)
-intro.title.AnchorPoint = Vector2.new(0.5, 0.5)
-intro.title.Position = UDim2.new(0.5, 0, 0.5, -6)
-intro.title.Size = UDim2.new(0, 760, 0, 60)
-intro.title.TextTransparency = 1
-intro.title.ZIndex = 28
-intro.title.TextStrokeColor3 = palette.border:Lerp(palette.accent, 0.44)
-intro.title.TextStrokeTransparency = 0.72
-intro.titleGradient = setIntroLabelGradient(intro.title, palette.text, palette.beamHot, Vector2.new(-1, 0))
-intro.titleShadowGradient = setIntroLabelGradient(intro.titleShadow, palette.accentSoft, palette.accent, Vector2.new(1, 0))
-
-intro.sub = makeLabel(intro.overlay, string.format("v%s  |  %s", CONFIG.version, CONFIG.panelSubtitle:gsub("^%s+", "")), 18, palette.accent, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-intro.sub.AnchorPoint = Vector2.new(0.5, 0.5)
-intro.sub.Position = UDim2.new(0.5, 0, 0.5, 36)
-intro.sub.Size = UDim2.new(0, 520, 0, 28)
-intro.sub.TextTransparency = 1
-intro.sub.ZIndex = 28
-intro.sub.TextStrokeColor3 = palette.accentSoft
-intro.sub.TextStrokeTransparency = 0.6
-intro.subGradient = setIntroLabelGradient(intro.sub, palette.accent, palette.beamHot, Vector2.new(-1, 0))
-
-intro.titleGlintLayer = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, 0, 0.5, 2),
-	Size = UDim2.new(0, 820, 0, 96),
-	ZIndex = 29,
-	Parent = intro.overlay,
-})
-
-for _, glintInfo in ipairs({
-	{ width = 210, height = 3, angle = -12, x = -282, y = -8, color = palette.text },
-	{ width = 160, height = 2, angle = 8, x = 204, y = 26, color = palette.accent },
-	{ width = 132, height = 2, angle = -18, x = 18, y = 42, color = palette.beamHot },
-	{ width = 104, height = 2, angle = 14, x = -96, y = -28, color = palette.ringB },
-}) do
-	local glint = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = glintInfo.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, glintInfo.x, 0.5, glintInfo.y),
-		Rotation = glintInfo.angle,
-		Size = UDim2.new(0, glintInfo.width, 0, glintInfo.height),
-		ZIndex = 27,
-		Parent = intro.titleGlintLayer,
-	})
-	addCorner(glint, 999)
-	table.insert(intro.titleChars, {
-		frame = glint,
-		home = glint.Position,
-		alpha = 0.22,
-	})
-end
-
-intro.leftLine = create("Frame", {
-	AnchorPoint = Vector2.new(1, 0.5),
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.36, 0, 0.5, 36),
-	Size = UDim2.new(0, 0, 0, 3),
-	ZIndex = 25,
-	Parent = intro.overlay,
-})
-addCorner(intro.leftLine, 999)
-
-intro.rightLine = create("Frame", {
-	BackgroundColor3 = palette.beamHot,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.64, 0, 0.5, 36),
-	Size = UDim2.new(0, 0, 0, 3),
-	ZIndex = 25,
-	Parent = intro.overlay,
-})
-addCorner(intro.rightLine, 999)
-
-intro.sideAccentStars = {}
-for _, accentInfo in ipairs({
-	{ pos = UDim2.new(0.34, 0, 0.5, 36), color = palette.accent, size = 20 },
-	{ pos = UDim2.new(0.66, 0, 0.5, 36), color = palette.accent, size = 20 },
-}) do
-	local main = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = accentInfo.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = accentInfo.pos,
-		Size = UDim2.new(0, accentInfo.size, 0, 2),
-		ZIndex = 26,
-		Parent = intro.overlay,
-	})
-	addCorner(main, 999)
-	local cross = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = accentInfo.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, 2, 0, accentInfo.size),
-		Parent = main,
-	})
-	addCorner(cross, 999)
-	table.insert(intro.sideAccentStars, {
-		main = main,
-		cross = cross,
-		size = accentInfo.size,
-	})
-end
-
-intro.radialStreaks = {}
-for _, streakInfo in ipairs({
-	{ rotation = -68, distance = 424, length = 172, thickness = 2, color = palette.accent, alpha = 0.78 },
-	{ rotation = -54, distance = 414, length = 118, thickness = 2, color = palette.ringA, alpha = 0.82 },
-	{ rotation = -39, distance = 432, length = 146, thickness = 1, color = palette.beamHot, alpha = 0.84 },
-	{ rotation = -18, distance = 426, length = 134, thickness = 1, color = palette.ringB, alpha = 0.86 },
-	{ rotation = 16, distance = 432, length = 152, thickness = 1, color = palette.accent, alpha = 0.84 },
-	{ rotation = 34, distance = 414, length = 126, thickness = 2, color = palette.border, alpha = 0.84 },
-	{ rotation = 58, distance = 420, length = 172, thickness = 2, color = palette.accent, alpha = 0.8 },
-	{ rotation = 73, distance = 434, length = 118, thickness = 1, color = palette.beamHot, alpha = 0.86 },
-	{ rotation = 112, distance = 438, length = 142, thickness = 1, color = palette.accent, alpha = 0.84 },
-	{ rotation = 138, distance = 420, length = 118, thickness = 1, color = palette.ringA, alpha = 0.86 },
-	{ rotation = 156, distance = 410, length = 162, thickness = 2, color = palette.accent, alpha = 0.82 },
-	{ rotation = 198, distance = 430, length = 134, thickness = 1, color = palette.border, alpha = 0.84 },
-	{ rotation = 224, distance = 424, length = 148, thickness = 1, color = palette.beamHot, alpha = 0.84 },
-	{ rotation = 248, distance = 416, length = 168, thickness = 2, color = palette.accent, alpha = 0.8 },
-	{ rotation = 286, distance = 434, length = 128, thickness = 1, color = palette.ringA, alpha = 0.84 },
-	{ rotation = 314, distance = 426, length = 162, thickness = 2, color = palette.accent, alpha = 0.8 },
-}) do
-	local radians = math.rad(streakInfo.rotation)
-	local x = math.cos(radians) * streakInfo.distance
-	local y = math.sin(radians) * streakInfo.distance
-	local streak = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = streakInfo.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, x, 0.5, y),
-		Rotation = streakInfo.rotation,
-		Size = UDim2.new(0, streakInfo.length, 0, streakInfo.thickness),
-		ZIndex = 22,
-		Parent = intro.overlay,
-	})
-	addCorner(streak, 999)
-	table.insert(intro.radialStreaks, {
-		frame = streak,
-		home = UDim2.new(0.5, x, 0.5, y),
-		size = streakInfo.length,
-		alpha = streakInfo.alpha,
-	})
-end
-
-intro.sparkles = {}
-for _, info in ipairs({
-	{ pos = UDim2.new(0.08, 0, 0.52, 0), size = 22, color = palette.accent },
-	{ pos = UDim2.new(0.19, 0, 0.42, 0), size = 10, color = palette.text },
-	{ pos = UDim2.new(0.30, 0, 0.37, 0), size = 8, color = palette.beamHot },
-	{ pos = UDim2.new(0.42, 0, 0.56, 0), size = 12, color = palette.text },
-	{ pos = UDim2.new(0.53, 0, 0.31, 0), size = 10, color = palette.accent },
-	{ pos = UDim2.new(0.70, 0, 0.38, 0), size = 10, color = palette.beamHot },
-	{ pos = UDim2.new(0.86, 0, 0.51, 0), size = 24, color = palette.accent },
-	{ pos = UDim2.new(0.78, 0, 0.42, 0), size = 8, color = palette.text },
-	{ pos = UDim2.new(0.60, 0, 0.79, 0), size = 8, color = palette.ringA },
-	{ pos = UDim2.new(0.25, 0, 0.80, 0), size = 7, color = palette.ringA },
-	{ pos = UDim2.new(0.73, 0, 0.24, 0), size = 7, color = palette.beamHot },
-	{ pos = UDim2.new(0.39, 0, 0.18, 0), size = 7, color = palette.beamHot },
-}) do
-	local sparkle = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = info.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = info.pos,
-		Size = UDim2.new(0, info.size, 0, 2),
-		Rotation = 0,
-		ZIndex = 24,
-		Parent = intro.overlay,
-	})
-	addCorner(sparkle, 999)
-	local sparkleCross = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = info.color,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, 2, 0, info.size),
-		Parent = sparkle,
-	})
-	addCorner(sparkleCross, 999)
-	table.insert(intro.sparkles, {
-		main = sparkle,
-		cross = sparkleCross,
-		size = info.size,
-		home = info.pos,
-	})
-end
-
-intro.dustLayer = create("Frame", {
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Size = UDim2.fromScale(1, 1),
-	ZIndex = 23,
-	Parent = intro.overlay,
-})
-
-for index = 1, 42 do
-	local color = (index % 4 == 0) and palette.dustA
-		or ((index % 3 == 0) and palette.accent or palette.dustB)
-	local size = ((index % 5) == 0) and 7 or (((index % 3) == 0) and 5 or 3)
-	local pos = UDim2.new(math.random(4, 96) / 100, 0, math.random(10, 92) / 100, 0)
-	local dot = createIntroDot(intro.dustLayer, size, color, 23)
-	dot.Position = pos
-	table.insert(intro.dustMotes, {
-		frame = dot,
-		home = pos,
-		alpha = 0.18 + ((index % 6) * 0.08),
-		speed = 0.4 + ((index % 7) * 0.12),
-	})
-end
-
-intro.glyphStars = {}
-for index = 1, 22 do
-	local angle = math.rad(((index - 1) / 22) * 360)
-	local radius = 188
-	local x = math.cos(angle) * radius
-	local y = math.sin(angle) * radius
-	local size = (index % 4 == 0) and 14 or 10
-	local star = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = palette.ringB,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, x, 0.5, y),
-		Size = UDim2.new(0, size, 0, 2),
-		Rotation = math.deg(angle),
-		ZIndex = 24,
-		Parent = intro.haloGlyph,
-	})
-	addCorner(star, 999)
-	local cross = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = palette.ringB,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		Size = UDim2.new(0, 2, 0, size),
-		Parent = star,
-	})
-	addCorner(cross, 999)
-	table.insert(intro.glyphStars, {
-		main = star,
-		cross = cross,
-		size = size,
-	})
-end
-
-
-local function play(onComplete)
-	pcall(function()
-		intro.sound.TimePosition = 0
-		intro.sound:Play()
-	end)
-
-	if intro.runtimeConnection then
-		intro.runtimeConnection:Disconnect()
-		intro.runtimeConnection = nil
-	end
-
-	intro.active = true
-	intro.overlay.BackgroundTransparency = 0
-	intro.backdrop.BackgroundTransparency = 0
-	intro.flashWash.BackgroundTransparency = 1
-	intro.topLetterbox.Size = UDim2.new(1, 0, 0, 34)
-	intro.bottomLetterbox.Size = UDim2.new(1, 0, 0, 34)
-	intro.vignette.ImageTransparency = 0.12
-	intro.hudFrame.BackgroundTransparency = 1
-	intro.hudFrame.Size = UDim2.new(0, 700, 0, 212)
-	local hudFrameStroke = intro.hudFrame:FindFirstChildOfClass("UIStroke")
-	if hudFrameStroke then
-		hudFrameStroke.Transparency = 1
-	end
-	intro.windowShell.BackgroundTransparency = 1
-	intro.windowShell.Size = UDim2.new(0, 580, 0, 176)
-	local windowShellStroke = intro.windowShell:FindFirstChildOfClass("UIStroke")
-	if windowShellStroke then
-		windowShellStroke.Transparency = 1
-	end
-	intro.windowTopBar.BackgroundTransparency = 1
-	intro.windowTopLine.BackgroundTransparency = 1
-	intro.windowTitle.TextTransparency = 1
-	intro.windowSub.TextTransparency = 1
-	intro.windowBadge.BackgroundTransparency = 1
-	intro.windowBodyDivider.BackgroundTransparency = 1
-	intro.windowBodyChip.BackgroundTransparency = 1
-	intro.hudSweep.BackgroundTransparency = 1
-	intro.hudSweep.Position = UDim2.new(0, -220, 0.5, 0)
-	intro.coreGlow.BackgroundTransparency = 1
-	intro.coreGlow.Size = UDim2.new(0, 84, 0, 84)
-	intro.auraGlow.BackgroundTransparency = 1
-	intro.auraGlow.Size = UDim2.new(0, 220, 0, 220)
-	intro.haloInner.Size = UDim2.new(0, 140, 0, 140)
-	intro.haloMid.Size = UDim2.new(0, 240, 0, 240)
-	intro.haloOuter.Size = UDim2.new(0, 220, 0, 220)
-	intro.haloGlyph.Size = UDim2.new(0, 460, 0, 460)
-	intro.orbitLayer.Rotation = 0
-	intro.ringArcLayer.Rotation = 0
-	intro.spokeLayer.Rotation = 0
-	intro.crossHorizontal.BackgroundTransparency = 1
-	intro.crossHorizontal.Size = UDim2.new(0, 280, 0, 4)
-	intro.crossVertical.BackgroundTransparency = 1
-	intro.crossVertical.Size = UDim2.new(0, 4, 0, 170)
-	intro.diagA.BackgroundTransparency = 1
-	intro.diagA.Rotation = 35
-	intro.diagB.BackgroundTransparency = 1
-	intro.diagB.Rotation = -31
-	intro.beamAuraA.BackgroundTransparency = 1
-	intro.beamAuraA.Rotation = 40
-	intro.beamAuraB.BackgroundTransparency = 1
-	intro.beamAuraB.Rotation = -24
-	intro.kicker.TextTransparency = 1
-	intro.title.TextTransparency = 1
-	intro.title.TextStrokeTransparency = 0.72
-	intro.titleShadow.TextTransparency = 1
-	if intro.titleGradient then
-		intro.titleGradient.Offset = Vector2.new(-1, 0)
-	end
-	if intro.titleShadowGradient then
-		intro.titleShadowGradient.Offset = Vector2.new(1, 0)
-	end
-	intro.title.Position = UDim2.new(0.5, 0, 0.5, 8)
-	intro.titleShadow.Position = UDim2.new(0.5, 10, 0.5, 12)
-	intro.sub.TextTransparency = 1
-	intro.sub.TextStrokeTransparency = 0.6
-	if intro.subGradient then
-		intro.subGradient.Offset = Vector2.new(-1, 0)
-	end
-	intro.leftLine.BackgroundTransparency = 1
-	intro.leftLine.Size = UDim2.new(0, 0, 0, 3)
-	intro.rightLine.BackgroundTransparency = 1
-	intro.rightLine.Size = UDim2.new(0, 0, 0, 3)
-	for _, accentStar in ipairs(intro.sideAccentStars or {}) do
-		accentStar.main.BackgroundTransparency = 1
-		accentStar.cross.BackgroundTransparency = 1
-	end
-	for _, cloud in ipairs(intro.nebulaClouds or {}) do
-		cloud.frame.BackgroundTransparency = 1
-		cloud.frame.Position = cloud.home
-	end
-	for _, dot in ipairs(intro.orbitalDots or {}) do
-		dot.frame.BackgroundTransparency = 1
-	end
-	for _, spoke in ipairs(intro.coreSpokes or {}) do
-		spoke.frame.BackgroundTransparency = 1
-		spoke.frame.Size = spoke.baseSize
-		spoke.frame.Rotation = spoke.baseRotation
-	end
-	for _, arc in ipairs(intro.ringArcs or {}) do
-		arc.frame.BackgroundTransparency = 1
-	end
-	for _, fragment in ipairs(intro.beamFragments or {}) do
-		fragment.frame.BackgroundTransparency = 1
-		fragment.frame.Position = fragment.home
-	end
-	for _, glint in ipairs(intro.titleChars or {}) do
-		glint.frame.BackgroundTransparency = 1
-		glint.frame.Position = glint.home
-	end
-	for _, dust in ipairs(intro.dustMotes or {}) do
-		dust.frame.BackgroundTransparency = 1
-		dust.frame.Position = dust.home
-	end
-
-	local haloInnerIn = TweenService:Create(intro.haloInner, TweenInfo.new(0.54, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		Size = UDim2.new(0, 360, 0, 360),
-	})
-	local haloMidIn = TweenService:Create(intro.haloMid, TweenInfo.new(0.62, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		Size = UDim2.new(0, 470, 0, 470),
-	})
-	local haloOuterIn = TweenService:Create(intro.haloOuter, TweenInfo.new(0.72, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		Size = UDim2.new(0, 620, 0, 620),
-	})
-	local haloInnerStroke = intro.haloInner:FindFirstChildOfClass("UIStroke")
-	if haloInnerStroke then
-		haloInnerStroke.Transparency = 1
-		TweenService:Create(haloInnerStroke, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Transparency = 0.36,
-		}):Play()
-	end
-	local haloOuterStroke = intro.haloOuter:FindFirstChildOfClass("UIStroke")
-	if haloOuterStroke then
-		haloOuterStroke.Transparency = 1
-		TweenService:Create(haloOuterStroke, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Transparency = 0.62,
-		}):Play()
-	end
-	local haloMidStroke = intro.haloMid:FindFirstChildOfClass("UIStroke")
-	if haloMidStroke then
-		haloMidStroke.Transparency = 1
-		TweenService:Create(haloMidStroke, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Transparency = 0.54,
-		}):Play()
-	end
-
-	local coreIn = TweenService:Create(intro.coreGlow, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.08,
-		Size = UDim2.new(0, 222, 0, 222),
-	})
-	local auraIn = TweenService:Create(intro.auraGlow, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.76,
-		Size = UDim2.new(0, 720, 0, 720),
-	})
-	local windowShellIn = TweenService:Create(intro.windowShell, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.06,
-		Size = UDim2.new(0, 620, 0, 196),
-	})
-	local hudFrameIn = TweenService:Create(intro.hudFrame, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.72,
-		Size = UDim2.new(0, 760, 0, 232),
-	})
-	local hudSweepIn = TweenService:Create(intro.hudSweep, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.12,
-	})
-	local crossHorizontalIn = TweenService:Create(intro.crossHorizontal, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.18,
-		Size = UDim2.new(0, 980, 0, 5),
-	})
-	local crossVerticalIn = TweenService:Create(intro.crossVertical, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.52,
-		Size = UDim2.new(0, 4, 0, 690),
-	})
-	local diagAIn = TweenService:Create(intro.diagA, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.08,
-		Rotation = 40,
-	})
-	local diagBIn = TweenService:Create(intro.diagB, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.18,
-		Rotation = -24,
-	})
-	local beamAuraAIn = TweenService:Create(intro.beamAuraA, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.28,
-	})
-	local beamAuraBIn = TweenService:Create(intro.beamAuraB, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.36,
-	})
-	local titleShadowIn = TweenService:Create(intro.titleShadow, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextTransparency = 0.4,
-		Position = UDim2.new(0.5, 7, 0.5, -1),
-	})
-	local titleIn = TweenService:Create(intro.title, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextTransparency = 0,
-		Position = UDim2.new(0.5, 0, 0.5, -8),
-	})
-	local subIn = TweenService:Create(intro.sub, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextTransparency = 0,
-		Position = UDim2.new(0.5, 0, 0.5, 82),
-	})
-	local leftLineIn = TweenService:Create(intro.leftLine, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0,
-		Size = UDim2.new(0, 344, 0, 3),
-	})
-	local rightLineIn = TweenService:Create(intro.rightLine, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0,
-		Size = UDim2.new(0, 344, 0, 3),
-	})
-
-	for _, cloud in ipairs(intro.nebulaClouds or {}) do
-		TweenService:Create(cloud.frame, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = cloud.alpha,
-		}):Play()
-	end
-	coreIn:Play()
-	auraIn:Play()
-	windowShellIn:Play()
-	hudFrameIn:Play()
-	hudSweepIn:Play()
-	crossHorizontalIn:Play()
-	TweenService:Create(intro.windowTopBar, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0,
-	}):Play()
-	TweenService:Create(intro.windowTopLine, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0,
-	}):Play()
-	TweenService:Create(intro.windowTitle, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextTransparency = 0,
-	}):Play()
-	TweenService:Create(intro.windowSub, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextTransparency = 0,
-	}):Play()
-	TweenService:Create(intro.windowBadge, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0,
-	}):Play()
-	TweenService:Create(intro.windowBodyDivider, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.34,
-	}):Play()
-	TweenService:Create(intro.windowBodyChip, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0,
-	}):Play()
-	if hudFrameStroke then
-		TweenService:Create(hudFrameStroke, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Transparency = 0.7,
-		}):Play()
-	end
-	if windowShellStroke then
-		TweenService:Create(windowShellStroke, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Transparency = 0.22,
-		}):Play()
-	end
-	for index, streak in ipairs(intro.radialStreaks or {}) do
-		if streak.frame and streak.frame.Parent then
-			streak.frame.BackgroundTransparency = 1
-			streak.frame.Position = UDim2.new(0.5, streak.home.X.Offset * 1.12, 0.5, streak.home.Y.Offset * 1.12)
-			task.delay(0.01 + (index * 0.012), function()
-				if intro.active and streak.frame and streak.frame.Parent then
-					TweenService:Create(streak.frame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-						BackgroundTransparency = streak.alpha,
-						Position = streak.home,
-					}):Play()
-				end
-			end)
-		end
-	end
-
-	for index, sparkle in ipairs(intro.sparkles) do
-		task.delay(0.05 + (index * 0.02), function()
-			if intro.active and sparkle.main and sparkle.main.Parent then
-				TweenService:Create(sparkle.main, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					BackgroundTransparency = 0.08,
-				}):Play()
-				TweenService:Create(sparkle.cross, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					BackgroundTransparency = 0.08,
-				}):Play()
-
-				task.spawn(function()
-					while intro.active and sparkle.main and sparkle.main.Parent do
-						local pulse = 0.72 + (math.random() * 0.3)
-						local widen = sparkle.size + math.random(4, 10)
-						TweenService:Create(sparkle.main, TweenInfo.new(pulse, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
-							BackgroundTransparency = 0.28,
-							Size = UDim2.new(0, widen, 0, 2),
-						}):Play()
-						TweenService:Create(sparkle.cross, TweenInfo.new(pulse, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
-							BackgroundTransparency = 0.28,
-							Size = UDim2.new(0, 2, 0, widen),
-						}):Play()
-						task.wait(pulse)
-						if not intro.active then
-							break
-						end
-						TweenService:Create(sparkle.main, TweenInfo.new(0.52, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
-							BackgroundTransparency = 0.08,
-							Size = UDim2.new(0, sparkle.size, 0, 2),
-						}):Play()
-						TweenService:Create(sparkle.cross, TweenInfo.new(0.52, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
-							BackgroundTransparency = 0.08,
-							Size = UDim2.new(0, 2, 0, sparkle.size),
-						}):Play()
-						task.wait(0.35 + (math.random() * 0.45))
-					end
-				end)
-			end
-		end)
-	end
-
-	task.wait(0.12)
-	crossVerticalIn:Play()
-
-	task.wait(0.06)
-	diagAIn:Play()
-	diagBIn:Play()
-	beamAuraAIn:Play()
-	beamAuraBIn:Play()
-
-	task.wait(0.08)
-	haloInnerIn:Play()
-	haloMidIn:Play()
-	haloOuterIn:Play()
-	TweenService:Create(intro.haloGlyph, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Size = UDim2.new(0, 580, 0, 580),
-	}):Play()
-	for _, arc in ipairs(intro.ringArcs or {}) do
-		TweenService:Create(arc.frame, TweenInfo.new(0.34, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = 0.54,
-		}):Play()
-	end
-	for _, spoke in ipairs(intro.coreSpokes or {}) do
-		TweenService:Create(spoke.frame, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = spoke.alpha,
-		}):Play()
-	end
-	for _, fragment in ipairs(intro.beamFragments or {}) do
-		TweenService:Create(fragment.frame, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = fragment.alpha,
-		}):Play()
-	end
-	for _, dot in ipairs(intro.orbitalDots or {}) do
-		TweenService:Create(dot.frame, TweenInfo.new(0.36, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = dot.alpha,
-		}):Play()
-	end
-
-	for index, glyphStar in ipairs(intro.glyphStars or {}) do
-		task.delay(0.18 + (index * 0.018), function()
-			if intro.active and glyphStar.main and glyphStar.main.Parent then
-				TweenService:Create(glyphStar.main, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					BackgroundTransparency = 0.3,
-				}):Play()
-				TweenService:Create(glyphStar.cross, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					BackgroundTransparency = 0.3,
-				}):Play()
-			end
-		end)
-	end
-
-	local runtimeStart = tick()
-	intro.runtimeConnection = RunService.RenderStepped:Connect(function()
-		if not intro.active or not intro.overlay or not intro.overlay.Parent then
-			return
-		end
-
-		local elapsed = tick() - runtimeStart
-		local glowPulse = 0.5 + (math.sin(elapsed * 4.2) * 0.5)
-		local beamPulse = 0.5 + (math.sin(elapsed * 2.4) * 0.5)
-		local ringPulse = 0.5 + (math.cos(elapsed * 1.8) * 0.5)
-		local orbitPulse = 0.5 + (math.sin(elapsed * 1.2) * 0.5)
-
-		intro.backdrop.Rotation = math.sin(elapsed * 0.14) * 2
-		intro.vignette.ImageTransparency = 0.06 + ((1 - glowPulse) * 0.08)
-		intro.topLetterbox.Size = UDim2.new(1, 0, 0, 34 - math.floor(glowPulse * 2))
-		intro.bottomLetterbox.Size = UDim2.new(1, 0, 0, 34 - math.floor(glowPulse * 2))
-
-		intro.haloGlyph.Rotation = elapsed * 15
-		intro.ringArcLayer.Rotation = elapsed * 11
-		intro.orbitLayer.Rotation = -(elapsed * 7)
-		intro.spokeLayer.Rotation = elapsed * 3.5
-		intro.haloInner.Rotation = -(elapsed * 6)
-		intro.haloMid.Rotation = elapsed * 5
-		intro.haloOuter.Rotation = elapsed * 4
-
-		intro.diagA.Rotation = 40 + (math.sin(elapsed * 1.55) * 4.5) + (elapsed * 1.4)
-		intro.diagB.Rotation = -24 + (math.cos(elapsed * 1.35) * 4) - (elapsed * 1.2)
-		intro.beamAuraA.Rotation = intro.diagA.Rotation
-		intro.beamAuraB.Rotation = intro.diagB.Rotation
-		if intro.titleGradient then
-			intro.titleGradient.Offset = Vector2.new(-1 + ((elapsed * 0.4) % 2), 0)
-		end
-		if intro.titleShadowGradient then
-			intro.titleShadowGradient.Offset = Vector2.new(1 - ((elapsed * 0.3) % 2), 0)
-		end
-		if intro.subGradient then
-			intro.subGradient.Offset = Vector2.new(-1 + ((elapsed * 0.6) % 2), 0)
-		end
-
-		intro.coreGlow.Size = UDim2.new(0, 222 + math.floor(glowPulse * 38), 0, 222 + math.floor(glowPulse * 38))
-		intro.auraGlow.Size = UDim2.new(0, 720 + math.floor(glowPulse * 90), 0, 720 + math.floor(glowPulse * 90))
-		intro.coreGlow.BackgroundTransparency = 0.05 - (glowPulse * 0.04)
-		intro.auraGlow.BackgroundTransparency = 0.72 - (glowPulse * 0.1)
-		intro.windowShell.Size = UDim2.new(0, 620 + math.floor(ringPulse * 6), 0, 196 + math.floor(glowPulse * 4))
-		intro.windowBadge.BackgroundTransparency = 0.04 - (beamPulse * 0.03)
-		intro.windowBodyChip.BackgroundTransparency = 0.06 - (beamPulse * 0.04)
-		if windowShellStroke then
-			windowShellStroke.Transparency = 0.26 - (beamPulse * 0.08)
-		end
-		intro.hudFrame.Size = UDim2.new(0, 760 + math.floor(ringPulse * 10), 0, 232 + math.floor(glowPulse * 6))
-		intro.hudFrame.BackgroundTransparency = 0.76 - (glowPulse * 0.04)
-		intro.hudSweep.Position = UDim2.new(0, math.floor(((elapsed * 420) % 980) - 220), 0.5, math.floor(math.sin(elapsed * 2.2) * 24))
-		intro.hudSweep.BackgroundTransparency = 0.14 - (beamPulse * 0.08)
-		if hudFrameStroke then
-			hudFrameStroke.Transparency = 0.72 - (beamPulse * 0.08)
-		end
-		intro.haloMid.Size = UDim2.new(0, 470 + math.floor(ringPulse * 14), 0, 470 + math.floor(ringPulse * 14))
-
-		intro.crossHorizontal.Size = UDim2.new(0, 980 + math.floor(beamPulse * 90), 0, 5)
-		intro.crossHorizontal.BackgroundTransparency = 0.18 - (beamPulse * 0.06)
-		intro.crossVertical.Size = UDim2.new(0, 4, 0, 690 + math.floor(beamPulse * 36))
-		intro.crossVertical.BackgroundTransparency = 0.52 - (beamPulse * 0.08)
-
-		intro.beamAuraA.BackgroundTransparency = 0.28 - (beamPulse * 0.08)
-		intro.beamAuraB.BackgroundTransparency = 0.36 - (beamPulse * 0.1)
-		intro.haloInner.Size = UDim2.new(0, 360 + math.floor(ringPulse * 10), 0, 360 + math.floor(ringPulse * 10))
-		intro.haloOuter.Size = UDim2.new(0, 620 + math.floor(ringPulse * 16), 0, 620 + math.floor(ringPulse * 16))
-		for index, cloud in ipairs(intro.nebulaClouds or {}) do
-			local swayX = math.sin((elapsed * 0.18) + index) * 12
-			local swayY = math.cos((elapsed * 0.14) + (index * 0.6)) * 10
-			cloud.frame.Position = UDim2.new(cloud.home.X.Scale, cloud.home.X.Offset + swayX, cloud.home.Y.Scale, cloud.home.Y.Offset + swayY)
-			cloud.frame.Size = UDim2.new(0, cloud.size + math.floor(glowPulse * 32), 0, cloud.size + math.floor(glowPulse * 32))
-			cloud.frame.BackgroundTransparency = cloud.alpha - (glowPulse * 0.05)
-		end
-
-		for index, streak in ipairs(intro.radialStreaks or {}) do
-			if streak.frame and streak.frame.Parent then
-				local drift = 1 + (math.sin((elapsed * 2.6) + index) * 0.035)
-				streak.frame.Position = UDim2.new(0.5, math.floor(streak.home.X.Offset * drift), 0.5, math.floor(streak.home.Y.Offset * drift))
-				streak.frame.BackgroundTransparency = math.clamp(streak.alpha - (beamPulse * 0.08), 0, 1)
-			end
-		end
-		for index, trail in ipairs(intro.beamTrails or {}) do
-			if trail.frame and trail.frame.Parent then
-				local trailPulse = 0.5 + (math.sin((elapsed * 2.8) + index) * 0.5)
-				trail.frame.Rotation = trail.baseRotation + (math.sin((elapsed * 0.9) + index) * 2.2)
-				trail.frame.Size = UDim2.new(0, trail.baseSize.X.Offset + math.floor(trailPulse * 36), 0, trail.baseSize.Y.Offset + math.floor(trailPulse * 6))
-				trail.frame.BackgroundTransparency = introClamp(trail.alpha - (trailPulse * 0.08), 0, 1)
-			end
-		end
-		for index, fragment in ipairs(intro.beamFragments or {}) do
-			if fragment.frame and fragment.frame.Parent then
-				local sweep = math.sin((elapsed * 3.2) + index) * 12
-				local radians = math.rad(fragment.angle)
-				fragment.frame.Position = UDim2.new(
-					0.5,
-					math.floor((math.cos(radians) * (fragment.distance + sweep))),
-					0.5,
-					math.floor((math.sin(radians) * (fragment.distance + sweep)))
-				)
-				fragment.frame.Rotation = fragment.angle + (math.sin((elapsed * 2.2) + index) * 6)
-				fragment.frame.BackgroundTransparency = 0.16 + ((1 - beamPulse) * 0.12)
-			end
-		end
-
-		for index, sparkle in ipairs(intro.sparkles or {}) do
-			if sparkle.main and sparkle.main.Parent then
-				local orbit = math.sin((elapsed * 1.8) + index) * 4
-				local rise = math.cos((elapsed * 1.4) + (index * 0.6)) * 5
-				sparkle.main.Position = UDim2.new(sparkle.home.X.Scale, sparkle.home.X.Offset + orbit, sparkle.home.Y.Scale, sparkle.home.Y.Offset + rise)
-				sparkle.main.Rotation = elapsed * (14 + index)
-			end
-		end
-		for index, dust in ipairs(intro.dustMotes or {}) do
-			if dust.frame and dust.frame.Parent then
-				local offsetX = math.sin((elapsed * dust.speed) + index) * 16
-				local offsetY = math.cos((elapsed * (dust.speed * 0.7)) + index) * 12
-				dust.frame.Position = UDim2.new(dust.home.X.Scale, dust.home.X.Offset + offsetX, dust.home.Y.Scale, dust.home.Y.Offset + offsetY)
-				dust.frame.BackgroundTransparency = introClamp(dust.alpha - (orbitPulse * 0.08), 0, 1)
-			end
-		end
-		for _, dot in ipairs(intro.orbitalDots or {}) do
-			if dot.frame and dot.frame.Parent then
-				local radians = math.rad(dot.angle + (elapsed * dot.speed * 10))
-				local radius = dot.radius + (math.sin((elapsed * 1.3) + dot.speed) * 6)
-				dot.frame.Position = UDim2.new(0.5, math.cos(radians) * radius, 0.5, math.sin(radians) * radius)
-				dot.frame.BackgroundTransparency = introClamp(dot.alpha - (orbitPulse * 0.12), 0, 1)
-			end
-		end
-		for index, arc in ipairs(intro.ringArcs or {}) do
-			if arc.frame and arc.frame.Parent then
-				local pulse = 0.54 - ((0.5 + (math.sin((elapsed * 1.9) + index) * 0.5)) * 0.14)
-				arc.frame.BackgroundTransparency = pulse
-			end
-		end
-		for index, spoke in ipairs(intro.coreSpokes or {}) do
-			if spoke.frame and spoke.frame.Parent then
-				local spokePulse = 0.5 + (math.sin((elapsed * 2.6) + index) * 0.5)
-				spoke.frame.Rotation = spoke.baseRotation + (math.sin((elapsed * 0.8) + index) * 4)
-				spoke.frame.Size = UDim2.new(0, spoke.baseSize.X.Offset + math.floor(spokePulse * 14), 0, spoke.baseSize.Y.Offset)
-				spoke.frame.BackgroundTransparency = introClamp(spoke.alpha - (spokePulse * 0.16), 0, 1)
-			end
-		end
-
-		for index, glyphStar in ipairs(intro.glyphStars or {}) do
-			if glyphStar.main and glyphStar.main.Parent then
-				local shimmer = 0.3 - ((0.5 + (math.sin((elapsed * 3.4) + index) * 0.5)) * 0.12)
-				glyphStar.main.BackgroundTransparency = shimmer
-				glyphStar.cross.BackgroundTransparency = shimmer
-			end
-		end
-
-		for index, accentStar in ipairs(intro.sideAccentStars or {}) do
-			if accentStar.main and accentStar.main.Parent then
-				local pulse = 0.12 - ((0.5 + (math.sin((elapsed * 4.1) + index) * 0.5)) * 0.06)
-				accentStar.main.BackgroundTransparency = pulse
-				accentStar.cross.BackgroundTransparency = pulse
-				accentStar.main.Rotation = elapsed * (18 + (index * 3))
-			end
-		end
-		for index, glint in ipairs(intro.titleChars or {}) do
-			if glint.frame and glint.frame.Parent then
-				local sweep = math.sin((elapsed * 2.2) + index) * 24
-				glint.frame.Position = UDim2.new(glint.home.X.Scale, glint.home.X.Offset + sweep, glint.home.Y.Scale, glint.home.Y.Offset)
-				glint.frame.BackgroundTransparency = 0.22 - ((0.5 + (math.sin((elapsed * 4.6) + index) * 0.5)) * 0.12)
-			end
-		end
-	end)
-
-	task.wait(0.18)
-	titleShadowIn:Play()
-	titleIn:Play()
-	TweenService:Create(intro.title, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextStrokeTransparency = 0.48,
-	}):Play()
-
-	task.wait(0.12)
-	subIn:Play()
-	leftLineIn:Play()
-	rightLineIn:Play()
-	for _, accentStar in ipairs(intro.sideAccentStars or {}) do
-		TweenService:Create(accentStar.main, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = 0.12,
-		}):Play()
-		TweenService:Create(accentStar.cross, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BackgroundTransparency = 0.12,
-		}):Play()
-	end
-
-	task.wait(0.94)
-	intro.active = false
-	if intro.runtimeConnection then
-		intro.runtimeConnection:Disconnect()
-		intro.runtimeConnection = nil
-	end
-
-	local fadeInfo = TweenInfo.new(0.34, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-	TweenService:Create(intro.flashWash, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		BackgroundTransparency = 0.16,
-	}):Play()
-	task.wait(0.08)
-	TweenService:Create(intro.overlay, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.backdrop, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowShell, fadeInfo, {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 660, 0, 212),
-	}):Play()
-	TweenService:Create(intro.windowTopBar, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowTopLine, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowTitle, fadeInfo, {
-		TextTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowSub, fadeInfo, {
-		TextTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowBadge, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowBodyDivider, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.windowBodyChip, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.hudFrame, fadeInfo, {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 820, 0, 250),
-	}):Play()
-	TweenService:Create(intro.hudSweep, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.topLetterbox, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.bottomLetterbox, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.coreGlow, fadeInfo, {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 420, 0, 420),
-	}):Play()
-	TweenService:Create(intro.auraGlow, fadeInfo, {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 920, 0, 920),
-	}):Play()
-	TweenService:Create(intro.crossVertical, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.crossHorizontal, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.diagA, fadeInfo, {
-		BackgroundTransparency = 1,
-		Rotation = 45,
-	}):Play()
-	TweenService:Create(intro.diagB, fadeInfo, {
-		BackgroundTransparency = 1,
-		Rotation = -21,
-	}):Play()
-	TweenService:Create(intro.beamAuraA, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.beamAuraB, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.haloInner, fadeInfo, {
-		Size = UDim2.new(0, 520, 0, 520),
-	}):Play()
-	TweenService:Create(intro.haloMid, fadeInfo, {
-		Size = UDim2.new(0, 620, 0, 620),
-	}):Play()
-	TweenService:Create(intro.haloOuter, fadeInfo, {
-		Size = UDim2.new(0, 760, 0, 760),
-	}):Play()
-	TweenService:Create(intro.haloGlyph, fadeInfo, {
-		Size = UDim2.new(0, 720, 0, 720),
-	}):Play()
-	if haloInnerStroke then
-		TweenService:Create(haloInnerStroke, fadeInfo, {
-			Transparency = 1,
-		}):Play()
-	end
-	if haloOuterStroke then
-		TweenService:Create(haloOuterStroke, fadeInfo, {
-			Transparency = 1,
-		}):Play()
-	end
-	if haloMidStroke then
-		TweenService:Create(haloMidStroke, fadeInfo, {
-			Transparency = 1,
-		}):Play()
-	end
-	if hudFrameStroke then
-		TweenService:Create(hudFrameStroke, fadeInfo, {
-			Transparency = 1,
-		}):Play()
-	end
-	if windowShellStroke then
-		TweenService:Create(windowShellStroke, fadeInfo, {
-			Transparency = 1,
-		}):Play()
-	end
-	TweenService:Create(intro.kicker, fadeInfo, {
-		TextTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.titleShadow, fadeInfo, {
-		TextTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.title, fadeInfo, {
-		TextTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.sub, fadeInfo, {
-		TextTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.title, fadeInfo, {
-		TextStrokeTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.sub, fadeInfo, {
-		TextStrokeTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.leftLine, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	TweenService:Create(intro.rightLine, fadeInfo, {
-		BackgroundTransparency = 1,
-	}):Play()
-	for _, streak in ipairs(intro.radialStreaks or {}) do
-		if streak.frame then
-			TweenService:Create(streak.frame, fadeInfo, {
-				BackgroundTransparency = 1,
-			}):Play()
-		end
-	end
-	for _, trail in ipairs(intro.beamTrails or {}) do
-		if trail.frame then
-			TweenService:Create(trail.frame, fadeInfo, {
-				BackgroundTransparency = 1,
-			}):Play()
-		end
-	end
-	for _, fragment in ipairs(intro.beamFragments or {}) do
-		if fragment.frame then
-			TweenService:Create(fragment.frame, fadeInfo, {
-				BackgroundTransparency = 1,
-			}):Play()
-		end
-	end
-	for _, sparkle in ipairs(intro.sparkles) do
-		TweenService:Create(sparkle.main, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-		TweenService:Create(sparkle.cross, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, glyphStar in ipairs(intro.glyphStars or {}) do
-		TweenService:Create(glyphStar.main, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-		TweenService:Create(glyphStar.cross, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, accentStar in ipairs(intro.sideAccentStars or {}) do
-		TweenService:Create(accentStar.main, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-		TweenService:Create(accentStar.cross, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, cloud in ipairs(intro.nebulaClouds or {}) do
-		TweenService:Create(cloud.frame, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, dot in ipairs(intro.orbitalDots or {}) do
-		TweenService:Create(dot.frame, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, dust in ipairs(intro.dustMotes or {}) do
-		TweenService:Create(dust.frame, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, arc in ipairs(intro.ringArcs or {}) do
-		TweenService:Create(arc.frame, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, spoke in ipairs(intro.coreSpokes or {}) do
-		TweenService:Create(spoke.frame, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	for _, glint in ipairs(intro.titleChars or {}) do
-		TweenService:Create(glint.frame, fadeInfo, {
-			BackgroundTransparency = 1,
-		}):Play()
-	end
-	TweenService:Create(intro.flashWash, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-		BackgroundTransparency = 1,
-	}):Play()
-
-	task.delay(0.42, function()
-		if intro.overlay then
-			intro.overlay:Destroy()
-		end
-	end)
-
-	if onComplete then
-		onComplete()
-	end
-end
-
-return {
-	play = play,
-	intro = intro,
-}
-end
-
-]==]
 
 local introController
 
@@ -4532,7 +1121,7 @@ local window = create("Frame", {
 	Position = UDim2.new(0.5, 0, 0.5, 0),
 	Size = UDim2.new(0, 416, 0, 454),
 	Active = true,
-	Draggable = true,
+	Draggable = false,
 	Parent = gui,
 })
 addCorner(window, 9)
@@ -4544,10 +1133,7 @@ local minimizedWindowSize = UDim2.new(0, 416, 0, 96)
 local minimalWindowSize = UDim2.new(0, 392, 0, 486)
 local minimalMinimizedWindowSize = UDim2.new(0, 392, 0, 82)
 local uiMinimized = false
-local updateInterval = 1 / 30
 currentFps = 0
-trackedEnemyCount = 0
-lastRefreshMs = 0
 
 PRESETS = {
 	{
@@ -4893,6 +1479,17 @@ chrome.topBar = create("Frame", {
 })
 addCorner(chrome.topBar, 9)
 
+chrome.dragHandle = create("TextButton", {
+	AutoButtonColor = false,
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 0, 0, 0),
+	Size = UDim2.new(1, -52, 0, 46),
+	Text = "",
+	ZIndex = 5,
+	Parent = chrome.topBar,
+})
+
 chrome.minimizeButton = create("TextButton", {
 	AnchorPoint = Vector2.new(1, 0),
 	AutoButtonColor = false,
@@ -5032,6 +1629,59 @@ local pagesContainer = create("Frame", {
 	Size = UDim2.new(1, 0, 1, 0),
 	Parent = content,
 })
+
+local function getViewportSize()
+	local camera = workspace.CurrentCamera
+	return camera and camera.ViewportSize or Vector2.new(1920, 1080)
+end
+
+local function setWindowTopLeft(topLeft, size)
+	local viewport = getViewportSize()
+	local width = size and size.X.Offset or window.AbsoluteSize.X
+	local height = size and size.Y.Offset or window.AbsoluteSize.Y
+	local maxX = math.max(0, viewport.X - width)
+	local maxY = math.max(0, viewport.Y - height)
+	local x = math.clamp(math.floor(topLeft.X + 0.5), 0, maxX)
+	local y = math.clamp(math.floor(topLeft.Y + 0.5), 0, maxY)
+	local centerX = x + (width * 0.5)
+	local centerY = y + (height * 0.5)
+
+	window.AnchorPoint = Vector2.new(0.5, 0.5)
+	window.Position = UDim2.new(0.5, centerX - (viewport.X * 0.5), 0.5, centerY - (viewport.Y * 0.5))
+end
+
+local function bindWindowDrag(handle)
+	local dragging = false
+	local dragStart
+	local startTopLeft
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+
+		dragging = true
+		dragStart = input.Position
+		startTopLeft = window.AbsolutePosition
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then
+			return
+		end
+
+		local delta = input.Position - dragStart
+		setWindowTopLeft(Vector2.new(startTopLeft.X + delta.X, startTopLeft.Y + delta.Y), window.Size)
+	end)
+end
+
+bindWindowDrag(chrome.dragHandle)
 
 local uiFrameworkFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\ui_framework.lua", UI_FRAMEWORK_MODULE_SOURCE)
 local uiFramework = type(uiFrameworkFactory) == "function" and uiFrameworkFactory({
@@ -6414,6 +3064,18 @@ viewButtons = {
 	reset = select(2, createCycleRow(pages.player, "RESET VIEW", "DEFAULT")),
 }
 
+do
+	local function collapseControlRow(guiObject)
+		local row = guiObject and guiObject.Parent
+		if row then
+			row.Visible = false
+			row.Size = UDim2.new(1, 0, 0, 0)
+		end
+	end
+
+	collapseControlRow(viewButtons.speed and viewButtons.speed.bar)
+end
+
 playerButtons = {
 	tabs = {},
 	status = nil,
@@ -6428,12 +3090,12 @@ playerButtons = {
 }
 
 miniHudLabels.bindTooltip(viewButtons.removeZoomLimit, "Removes the default local camera zoom cap so you can scroll farther out.")
-miniHudLabels.bindTooltip(viewButtons.status, "Shows whether you are on local view, spectating, or in freecam.")
+miniHudLabels.bindTooltip(viewButtons.status, "Shows whether you are on local view or spectating.")
 miniHudLabels.bindTooltip(viewButtons.spectate.main, "Open the player list to spectate another character.")
 miniHudLabels.bindTooltip(viewButtons.spectate.off, "Immediately return from spectate to your own camera.")
-miniHudLabels.bindTooltip(viewButtons.freeCam, "Toggles scriptable freecam with independent movement controls.")
-miniHudLabels.bindTooltip(viewButtons.speed.bar, "Sets the movement speed used while freecam is active.")
-miniHudLabels.bindTooltip(viewButtons.reset, "Restores freecam, spectate, and view settings.")
+miniHudLabels.bindTooltip(viewButtons.freeCam, "Free Cam is disabled in this build.")
+miniHudLabels.bindTooltip(viewButtons.speed.bar, "Free Cam speed is retained for old configs but not used.")
+miniHudLabels.bindTooltip(viewButtons.reset, "Restores spectate and view settings.")
 miniHudLabels.bindTooltip(viewButtons.nav.prev, "Step to the previous player in the spectate list.")
 miniHudLabels.bindTooltip(viewButtons.nav.next, "Step to the next player in the spectate list.")
 
@@ -6509,6 +3171,46 @@ do
 	playerButtons.setTab("view")
 end
 
+local function addRiskWarning(control, tooltipText)
+	local row = control and control.Parent
+	if not row or row:FindFirstChild("RiskWarning") then
+		return
+	end
+
+	local warning = create("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBlack,
+		Name = "RiskWarning",
+		Position = UDim2.new(1, -72, 0.5, 0),
+		Size = UDim2.new(0, 14, 0, 14),
+		Text = "▲",
+		TextColor3 = Color3.fromRGB(255, 92, 92),
+		TextSize = 12,
+		TextStrokeColor3 = Color3.fromRGB(32, 8, 8),
+		TextStrokeTransparency = 0.2,
+		ZIndex = math.max(row.ZIndex or 1, control.ZIndex or 1) + 3,
+		Parent = row,
+	})
+
+	local function updateWarningPosition()
+		if not row.Parent or not control.Parent or row.AbsoluteSize.X <= 0 then
+			return
+		end
+
+		local controlLeft = control.AbsolutePosition.X - row.AbsolutePosition.X
+		local x = math.clamp(controlLeft - 12, 84, math.max(84, row.AbsoluteSize.X - 22))
+		warning.Position = UDim2.new(0, x, 0.5, 0)
+	end
+
+	task.defer(updateWarningPosition)
+	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateWarningPosition)
+	control:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateWarningPosition)
+	control:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateWarningPosition)
+	miniHudLabels.bindTooltip(warning, tooltipText or "Use with caution. This feature may be risky in some games.")
+end
+
 miniHudLabels.bindTooltip(playerButtons.walkSpeedToggle, "Override your local walk speed with the value below.")
 miniHudLabels.bindTooltip(playerButtons.walkSpeed.bar, "Set the local movement speed used when walk speed override is enabled.")
 miniHudLabels.bindTooltip(playerButtons.infiniteJump, "Lets the local humanoid jump again while already airborne.")
@@ -6518,6 +3220,16 @@ miniHudLabels.bindTooltip(playerButtons.flySpeed.bar, "Sets the base movement sp
 miniHudLabels.bindTooltip(playerButtons.clickTeleport, "Hold LeftControl and click to teleport to the cursor position.")
 miniHudLabels.bindTooltip(playerButtons.status, "Shows which local movement utilities are currently active.")
 miniHudLabels.bindTooltip(playerButtons.reset, "Restores local movement settings to their default values for this session.")
+
+addRiskWarning(viewButtons.freeCam, "Use with caution. Free Cam is disabled here because scriptable camera movement is commonly flagged.")
+addRiskWarning(viewButtons.removeZoomLimit, "Use with caution. Camera changes can be noticeable in some games.")
+addRiskWarning(playerButtons.walkSpeedToggle, "Use with caution. Movement speed changes can be detected by some games.")
+addRiskWarning(playerButtons.walkSpeed.bar, "Use with caution. Higher speed values can be detected by some games.")
+addRiskWarning(playerButtons.infiniteJump, "Use with caution. Repeated airborne jumps can be detected by some games.")
+addRiskWarning(playerButtons.noclip, "Use with caution. Collision bypass can be detected by some games.")
+addRiskWarning(playerButtons.fly, "Use with caution. Flight is a high-risk movement feature.")
+addRiskWarning(playerButtons.flySpeed.bar, "Use with caution. Higher flight speed values can be detected by some games.")
+addRiskWarning(playerButtons.clickTeleport, "Use with caution. Teleporting movement is a high-risk feature.")
 
 miniHudLabels.utility.performanceToggles = {
 	mode = select(2, createToggleRow(pages.performance, "PERF BOOST", CONFIG.performanceMode)),
@@ -6534,7 +3246,6 @@ miniHudLabels.bindTooltip(miniHudLabels.utility.performanceToggles.shadows, "Tur
 
 local espObjects = {}
 local drawingSupported = DRAWING_SUPPORT.line
-local focusedPlayer = nil
 miniHudLabels.utility.targetTelemetry = {}
 local performanceCache = {
 	parts = {},
@@ -6542,8 +3253,6 @@ local performanceCache = {
 	effects = {},
 	lighting = nil,
 }
-local crosshairObjects = {}
-local fovCircleObject
 miniHudLabels.utility.trainer = miniHudLabels.utility.trainer or {
 	targetPosition = nil,
 	targetSpawnAt = 0,
@@ -6715,7 +3424,7 @@ function isChamsBoxMode(mode)
 end
 
 local function isFocusedTarget(player)
-	return CONFIG.showFocusTarget and focusedPlayer == player
+	return CONFIG.showFocusTarget and espRuntimeState.focusedPlayer == player
 end
 
 local function getTracerColor(player)
@@ -7089,6 +3798,7 @@ end
 local function stopFly()
 	local humanoid = getLocalHumanoid()
 	local root = getLocalRoot()
+	setLocalMovementSuppressed(false)
 	if humanoid then
 		humanoid.PlatformStand = false
 		humanoid.AutoRotate = true
@@ -7180,1613 +3890,121 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 
-local function applyZoomLimitSetting()
-	if not LOCAL_PLAYER then
-		return
-	end
-
-	if viewState.defaultMinZoomDistance == nil then
-		viewState.defaultMinZoomDistance = LOCAL_PLAYER.CameraMinZoomDistance
-	end
-
-	if viewState.defaultMaxZoomDistance == nil then
-		viewState.defaultMaxZoomDistance = LOCAL_PLAYER.CameraMaxZoomDistance
-	end
-
-	if CONFIG.removeZoomLimit then
-		LOCAL_PLAYER.CameraMinZoomDistance = 0.5
-		LOCAL_PLAYER.CameraMaxZoomDistance = 100000
-	else
-		LOCAL_PLAYER.CameraMinZoomDistance = viewState.defaultMinZoomDistance
-		LOCAL_PLAYER.CameraMaxZoomDistance = viewState.defaultMaxZoomDistance
-	end
-end
-
-local function setLocalMovementSuppressed(state)
-	local humanoid = getLocalHumanoid()
-
-	if state then
-		if not viewState.controls then
-			local success, controls = pcall(function()
-				return require(LOCAL_PLAYER.PlayerScripts:WaitForChild("PlayerModule")):GetControls()
-			end)
-			if success then
-				viewState.controls = controls
-			end
-		end
-
-		if viewState.controls then
-			pcall(function()
-				viewState.controls:Disable()
-			end)
-		end
-
-		if humanoid then
-			if not viewState.humanoidState or viewState.humanoidState.humanoid ~= humanoid then
-				viewState.humanoidState = {
-					humanoid = humanoid,
-					walkSpeed = humanoid.WalkSpeed,
-					jumpPower = humanoid.JumpPower,
-					jumpHeight = humanoid.JumpHeight,
-					autoRotate = humanoid.AutoRotate,
-				}
-			end
-
-			humanoid.WalkSpeed = 0
-			humanoid.JumpPower = 0
-			humanoid.JumpHeight = 0
-			humanoid.AutoRotate = false
-			humanoid:Move(Vector3.zero, true)
-		end
-	else
-		if viewState.controls then
-			pcall(function()
-				viewState.controls:Enable()
-			end)
-		end
-
-		local cached = viewState.humanoidState
-		if cached and cached.humanoid and cached.humanoid.Parent then
-			cached.humanoid.WalkSpeed = cached.walkSpeed
-			cached.humanoid.JumpPower = cached.jumpPower
-			cached.humanoid.JumpHeight = cached.jumpHeight
-			cached.humanoid.AutoRotate = cached.autoRotate
-		end
-
-		viewState.humanoidState = nil
+do
+	local viewFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\view_runtime.lua", VIEW_RUNTIME_MODULE_SOURCE)
+	if type(viewFactory) == "function" then
+		viewRuntime = viewFactory({
+			CONFIG = CONFIG,
+			LOCAL_PLAYER = LOCAL_PLAYER,
+			UserInputService = UserInputService,
+			viewState = viewState,
+			viewButtons = viewButtons,
+			playerButtons = playerButtons,
+			THEME = THEME,
+			truncateText = truncateText,
+			getCamera = getCamera,
+			getLocalHumanoid = getLocalHumanoid,
+			getMouseLocation = function()
+				return UserInputService:GetMouseLocation()
+			end,
+			setToggleState = function(button, state)
+				return setToggleState(button, state)
+			end,
+			setSliderState = function(slider, value)
+				return setSliderState(slider, value)
+			end,
+			updateMouseIconVisibility = function()
+				return updateMouseIconVisibility()
+			end,
+			showToast = showToast,
+			updateKeybindController = function()
+				if keybindController then
+					keybindController.update()
+				end
+			end,
+		})
 	end
 end
 
-local function restoreLocalCamera()
-	local camera = getCamera()
-	if not camera then
-		return
-	end
-
-	local humanoid = getLocalHumanoid()
-	camera.CameraType = Enum.CameraType.Custom
-	if humanoid then
-		camera.CameraSubject = humanoid
-	end
-end
-
-local function updateViewUi()
-	if viewButtons.status then
-		if viewState.freeCamEnabled then
-			viewButtons.status.Text = "FREE CAM"
-			viewButtons.status.TextColor3 = THEME.accent
-		elseif viewState.spectateTarget then
-			viewButtons.status.Text = truncateText(viewState.spectateTarget.Name, 14)
-			viewButtons.status.TextColor3 = THEME.focus
-		else
-			viewButtons.status.Text = "LOCAL"
-			viewButtons.status.TextColor3 = THEME.text
-		end
-	end
-	if viewButtons.spectate then
-		viewButtons.spectate.main.Text = viewState.spectateTarget and truncateText(viewState.spectateTarget.Name, 14) or "SELECT"
-	end
-	if viewButtons.freeCam then
-		setToggleState(viewButtons.freeCam, viewState.freeCamEnabled)
-	end
-	if viewButtons.speed then
-		setSliderState(viewButtons.speed, CONFIG.freeCamSpeed)
-	end
-	if playerButtons.status then
-		local states = {}
-		if CONFIG.walkSpeedEnabled then
-			table.insert(states, string.format("SPD %d", CONFIG.walkSpeed))
-		end
-		if CONFIG.infiniteJump then
-			table.insert(states, "INF JUMP")
-		end
-		if CONFIG.fly then
-			table.insert(states, "FLY")
-		end
-		if CONFIG.noclip then
-			table.insert(states, "NOCLIP")
-		end
-		if CONFIG.clickTeleport then
-			table.insert(states, "CLICK TP")
-		end
-		playerButtons.status.Text = #states > 0 and table.concat(states, " | ") or "LOCAL"
-		playerButtons.status.TextColor3 = #states > 0 and THEME.accent or THEME.text
-	end
-end
-
-local function setSpectateTarget(player)
-	local camera = getCamera()
-	viewState.spectateTarget = player
-	if viewState.freeCamEnabled then
-		viewState.freeCamEnabled = false
-		viewState.lookHeld = false
-		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-		setLocalMovementSuppressed(false)
-	end
-
-	if camera and player and player.Character then
-		local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			camera.CameraType = Enum.CameraType.Custom
-			camera.CameraSubject = humanoid
-		end
-	elseif not viewState.freeCamEnabled then
-		restoreLocalCamera()
-	end
-
-	updateViewUi()
-end
-
-local function toggleFreeCam()
-	local camera = getCamera()
-	if not camera then
-		return
-	end
-
-	viewState.freeCamEnabled = not viewState.freeCamEnabled
-	viewState.moveForward = 0
-	viewState.moveRight = 0
-	viewState.moveUp = 0
-
-	if viewState.freeCamEnabled then
-		local lookVector = camera.CFrame.LookVector
-		viewState.spectateTarget = nil
-		viewState.freeCamCFrame = camera.CFrame
-		viewState.freeCamYaw = math.atan2(-lookVector.X, -lookVector.Z)
-		viewState.freeCamPitch = math.asin(math.clamp(lookVector.Y, -1, 1))
-		viewState.lookHeld = false
-		setLocalMovementSuppressed(true)
-		camera.CameraType = Enum.CameraType.Scriptable
-		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-	else
-		viewState.lookHeld = false
-		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-		setLocalMovementSuppressed(false)
-		restoreLocalCamera()
-	end
-
-	updateViewUi()
-	updateMouseIconVisibility()
-	if keybindController then
-		keybindController.update()
-	end
-	showToast("View", viewState.freeCamEnabled and "Free Cam enabled" or "Free Cam disabled", viewState.freeCamEnabled and THEME.accent or THEME.muted)
-end
-
-local function applyCameraFov()
-	local camera = getCamera()
-	if camera and math.abs(camera.FieldOfView - CONFIG.cameraFov) > 0.05 then
-		camera.FieldOfView = CONFIG.cameraFov
-	end
+if viewRuntime then
+	applyZoomLimitSetting = viewRuntime.applyZoomLimitSetting
+	setLocalMovementSuppressed = viewRuntime.setLocalMovementSuppressed
+	restoreLocalCamera = viewRuntime.restoreLocalCamera
+	updateViewUi = viewRuntime.updateViewUi
+	setSpectateTarget = viewRuntime.setSpectateTarget
+	toggleFreeCam = viewRuntime.toggleFreeCam
+	applyCameraFov = viewRuntime.applyCameraFov
+	getMouseScreenPosition = viewRuntime.getMouseScreenPosition
+	getTracerOrigin = viewRuntime.getTracerOrigin
 end
 
 function getCharacterRoot(character)
 	return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
 end
 
-local function getMouseScreenPosition(camera)
-	camera = camera or workspace.CurrentCamera
-	if not camera then
-		return nil
-	end
-
-	local viewport = camera.ViewportSize
-	if not viewport then
-		return nil
-	end
-
-	local mouseLocation = UserInputService:GetMouseLocation()
-	if typeof(mouseLocation) == "Vector2" and mouseLocation.X == mouseLocation.X and mouseLocation.Y == mouseLocation.Y then
-		return Vector2.new(
-			math.clamp(mouseLocation.X, 0, viewport.X),
-			math.clamp(mouseLocation.Y, 0, viewport.Y)
-		)
-	end
-
-	local mouse = LOCAL_PLAYER and LOCAL_PLAYER:GetMouse()
-	if mouse and tonumber(mouse.X) and tonumber(mouse.Y) then
-		return Vector2.new(
-			math.clamp(mouse.X, 0, viewport.X),
-			math.clamp(mouse.Y, 0, viewport.Y)
-		)
-	end
-
-	return Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
-end
-
-local function getTracerOrigin(camera)
-	if CONFIG.tracerOriginMode == "Center" then
-		return Vector2.new(camera.ViewportSize.X * 0.5, camera.ViewportSize.Y * 0.5)
-	end
-
-	if CONFIG.tracerOriginMode == "Crosshair" then
-		local mousePosition = getMouseScreenPosition(camera)
-		if mousePosition then
-			return mousePosition
-		end
-	end
-
-	return Vector2.new(camera.ViewportSize.X * 0.5, camera.ViewportSize.Y - 24)
-end
-
-local function cacheLighting()
-	if not performanceCache.lighting then
-		performanceCache.lighting = {
-			GlobalShadows = Lighting.GlobalShadows,
-			FogEnd = Lighting.FogEnd,
-			Brightness = Lighting.Brightness,
-		}
-	end
-end
-
-local function restorePartAppearance(part)
-	local cached = performanceCache.parts[part]
-	if cached and part.Parent then
-		part.Material = cached.Material
-		part.Reflectance = cached.Reflectance
-	end
-	performanceCache.parts[part] = nil
-end
-
-local function restoreTextureAppearance(item)
-	local cached = performanceCache.textures[item]
-	if cached and item.Parent then
-		item.Transparency = cached.Transparency
-	end
-	performanceCache.textures[item] = nil
-end
-
-local function restoreEffectAppearance(item)
-	local cached = performanceCache.effects[item]
-	if cached and item.Parent and (item:IsA("ParticleEmitter") or item:IsA("Trail") or item:IsA("Beam") or item:IsA("Smoke") or item:IsA("Fire") or item:IsA("Sparkles")) then
-		item.Enabled = cached.Enabled
-	end
-	performanceCache.effects[item] = nil
-end
-
-local function applyPerformanceSettings()
-	local performanceRequested = CONFIG.performanceMode or CONFIG.simplifyMaterials or CONFIG.hideTextures or CONFIG.hideEffects or CONFIG.disableShadows
-	local hasCachedChanges = performanceCache.lighting ~= nil
-		or next(performanceCache.parts) ~= nil
-		or next(performanceCache.textures) ~= nil
-		or next(performanceCache.effects) ~= nil
-
-	if CONFIG.performanceMode then
-		CONFIG.simplifyMaterials = true
-		CONFIG.hideTextures = true
-		CONFIG.hideEffects = true
-		CONFIG.disableShadows = true
-	end
-
-	if not performanceRequested and not hasCachedChanges then
-		return
-	end
-
-	cacheLighting()
-
-	for _, descendant in ipairs(workspace:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			if CONFIG.simplifyMaterials then
-				if not performanceCache.parts[descendant] then
-					performanceCache.parts[descendant] = {
-						Material = descendant.Material,
-						Reflectance = descendant.Reflectance,
-					}
-				end
-				descendant.Material = Enum.Material.SmoothPlastic
-				descendant.Reflectance = 0
-			else
-				restorePartAppearance(descendant)
-			end
-		elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
-			if CONFIG.hideTextures then
-				if not performanceCache.textures[descendant] then
-					performanceCache.textures[descendant] = {
-						Transparency = descendant.Transparency,
-					}
-				end
-				descendant.Transparency = 1
-			else
-				restoreTextureAppearance(descendant)
-			end
-		elseif descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") or descendant:IsA("Smoke") or descendant:IsA("Fire") or descendant:IsA("Sparkles") then
-			if CONFIG.hideEffects then
-				if not performanceCache.effects[descendant] then
-					performanceCache.effects[descendant] = {
-						Enabled = descendant.Enabled,
-					}
-				end
-				descendant.Enabled = false
-			end
-		end
-	end
-
-	for item in pairs(performanceCache.parts) do
-		if not item.Parent or not CONFIG.simplifyMaterials then
-			restorePartAppearance(item)
-		end
-	end
-
-	for item in pairs(performanceCache.textures) do
-		if not item.Parent or not CONFIG.hideTextures then
-			restoreTextureAppearance(item)
-		end
-	end
-
-	for item, cached in pairs(performanceCache.effects) do
-		if not item.Parent then
-			performanceCache.effects[item] = nil
-		elseif not CONFIG.hideEffects then
-			item.Enabled = cached.Enabled
-			performanceCache.effects[item] = nil
-		end
-	end
-
-	if performanceCache.lighting then
-		if CONFIG.disableShadows then
-			Lighting.GlobalShadows = false
-			Lighting.FogEnd = 100000
-			Lighting.Brightness = math.max(Lighting.Brightness, 2)
-		else
-			Lighting.GlobalShadows = performanceCache.lighting.GlobalShadows
-			Lighting.FogEnd = performanceCache.lighting.FogEnd
-			Lighting.Brightness = performanceCache.lighting.Brightness
-		end
-	end
-end
-
-local function getEspEntry(player)
-	local entry = espObjects[player]
-	if entry then
-		entry.player = player
-		return entry
-	end
-
-	entry = {
-		player = player,
-	}
-	espObjects[player] = entry
-	return entry
-end
-
-local function clearEntry(entry)
-	if entry.highlight then
-		entry.highlight:Destroy()
-		entry.highlight = nil
-	end
-
-	if entry.billboard then
-		entry.billboard:Destroy()
-		entry.billboard = nil
-		entry.title = nil
-		entry.healthBack = nil
-		entry.healthFill = nil
-		entry.devRing = nil
-	end
-
-	if entry.tracer then
-		entry.tracer.Visible = false
-		removeDrawingObject(entry.tracer)
-		entry.tracer = nil
-	end
-
-	if entry.tracerBranch then
-		entry.tracerBranch.Visible = false
-		removeDrawingObject(entry.tracerBranch)
-		entry.tracerBranch = nil
-	end
-
-	if entry.headDot then
-		entry.headDot.Visible = false
-		removeDrawingObject(entry.headDot)
-		entry.headDot = nil
-	end
-
-	if entry.box then
-		entry.box.Visible = false
-		removeDrawingObject(entry.box)
-		entry.box = nil
-	end
-
-	if entry.cornerLines then
-		for _, line in ipairs(entry.cornerLines) do
-			line.Visible = false
-			removeDrawingObject(line)
-		end
-		entry.cornerLines = nil
-	end
-
-	if entry.healthBoxLines then
-		for _, line in ipairs(entry.healthBoxLines) do
-			line.Visible = false
-			removeDrawingObject(line)
-		end
-		entry.healthBoxLines = nil
-	end
-
-	if entry.box3DLines then
-		for _, line in ipairs(entry.box3DLines) do
-			line.Visible = false
-			removeDrawingObject(line)
-		end
-		entry.box3DLines = nil
-	end
-
-	if entry.box3DCornerLines then
-		for _, line in ipairs(entry.box3DCornerLines) do
-			line.Visible = false
-			removeDrawingObject(line)
-		end
-		entry.box3DCornerLines = nil
-	end
-
-	if entry.skeletonLines then
-		for _, line in ipairs(entry.skeletonLines) do
-			line.Visible = false
-			removeDrawingObject(line)
-		end
-		entry.skeletonLines = nil
-	end
-
-	if entry.lookArrowLines then
-		for _, line in ipairs(entry.lookArrowLines) do
-			line.Visible = false
-			removeDrawingObject(line)
-		end
-		entry.lookArrowLines = nil
-	end
-
-end
-
-local function clearPlayerEsp(player)
-	local entry = espObjects[player]
-	if not entry then
-		return
-	end
-
-	clearEntry(entry)
-end
-
-local function ensureHighlight(entry, character)
-	if entry.highlight and entry.highlight.Parent ~= character then
-		entry.highlight:Destroy()
-		entry.highlight = nil
-	end
-
-	if not entry.highlight then
-		entry.highlight = Instance.new("Highlight")
-		entry.highlight.Name = "CHIBU_ESP"
-		entry.highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		entry.highlight.Parent = character
-	end
-
-	return entry.highlight
-end
-
-local function ensureBillboard(entry, character)
-	if entry.billboard and entry.billboard.Parent ~= character then
-		entry.billboard:Destroy()
-		entry.billboard = nil
-		entry.title = nil
-		entry.healthBack = nil
-		entry.healthFill = nil
-	end
-
-	if not entry.billboard then
-		local billboard = Instance.new("BillboardGui")
-		billboard.Name = "CHIBU_INFO"
-		billboard.Adornee = character:FindFirstChild("Head")
-		billboard.AlwaysOnTop = true
-		billboard.LightInfluence = 0
-		billboard.MaxDistance = CONFIG.maxDistance
-		billboard.Size = UDim2.new(0, 180, 0, 30)
-		billboard.StudsOffset = Vector3.new(0, 2.8, 0)
-		billboard.Parent = character
-
-		local devRing = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = THEME.accent,
-			BackgroundTransparency = 0.78,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 0, 0.98, 0),
-			Size = UDim2.new(0, 72, 0, 18),
-			Visible = false,
-			ZIndex = 0,
-			Parent = billboard,
+do
+	local performanceFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\performance_runtime.lua", PERFORMANCE_RUNTIME_MODULE_SOURCE)
+	if type(performanceFactory) == "function" then
+		performanceRuntime = performanceFactory({
+			CONFIG = CONFIG,
+			Lighting = Lighting,
+			workspace = workspace,
+			performanceCache = performanceCache,
 		})
-		addCorner(devRing, 999)
+	end
+end
 
-		create("UIGradient", {
-			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
-			}),
-			Rotation = 0,
-			Parent = devRing,
+if performanceRuntime then
+	applyPerformanceSettings = performanceRuntime.applyPerformanceSettings
+end
+
+local drawingEsp
+
+do
+	local drawingFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\drawing_esp.lua", DRAWING_ESP_MODULE_SOURCE)
+	if type(drawingFactory) == "function" then
+		drawingEsp = drawingFactory({
+			CONFIG = CONFIG,
+			LOCAL_PLAYER = LOCAL_PLAYER,
+			THEME = THEME,
+			DEV_TAG_TEXT = DEV_TAG_TEXT,
+			DRAWING_SUPPORT = DRAWING_SUPPORT,
+			SKELETON_CONNECTIONS = SKELETON_CONNECTIONS,
+			BOX_3D_EDGES = BOX_3D_EDGES,
+			drawingSupported = drawingSupported,
+			espObjects = espObjects,
+			create = create,
+			addCorner = addCorner,
+			createDrawing = createDrawing,
+			removeDrawingObject = removeDrawingObject,
+			getCharacterRoot = getCharacterRoot,
+			getEffectiveBoxMode = getEffectiveBoxMode,
+			isChamsBoxMode = isChamsBoxMode,
+			isFocusedTarget = isFocusedTarget,
+			getCamera = getCamera,
+			getHeldToolName = getHeldToolName,
+			getTracerOrigin = getTracerOrigin,
+			getMouseScreenPosition = getMouseScreenPosition,
+			updateMouseIconVisibility = updateMouseIconVisibility,
+			CROSSHAIR_COLOR_OPTIONS = CROSSHAIR_COLOR_OPTIONS,
+			gui = gui,
+			window = window,
+			UserInputService = UserInputService,
+			viewState = viewState,
 		})
-
-		local title = create("TextLabel", {
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Font = Enum.Font.GothamBold,
-			Position = UDim2.new(0, 0, 0, 0),
-			Size = UDim2.new(1, 0, 0, 18),
-			Text = "",
-			TextColor3 = THEME.text,
-			TextSize = 12,
-			TextStrokeTransparency = 0.45,
-			Parent = billboard,
-		})
-
-		local healthBack = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 1),
-			BackgroundColor3 = Color3.fromRGB(42, 42, 52),
-			BorderSizePixel = 0,
-			Position = UDim2.new(0.5, 0, 1, -2),
-			Size = UDim2.new(0, 70, 0, 4),
-			Parent = billboard,
-		})
-		addCorner(healthBack, 999)
-
-		local healthFill = create("Frame", {
-			BackgroundColor3 = CONFIG.visibleColor,
-			BorderSizePixel = 0,
-			Size = UDim2.new(1, 0, 1, 0),
-			Parent = healthBack,
-		})
-		addCorner(healthFill, 999)
-
-		entry.billboard = billboard
-		entry.devRing = devRing
-		entry.title = title
-		entry.healthBack = healthBack
-		entry.healthFill = healthFill
-	end
-
-	local head = character:FindFirstChild("Head")
-	if head then
-		entry.billboard.Adornee = head
-	end
-
-	entry.billboard.MaxDistance = CONFIG.maxDistance
-	return entry.billboard, entry.title
-end
-
-local function ensureTracer(entry)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry.tracer then
-		entry.tracer = createDrawing("Line")
-		if not entry.tracer then
-			return nil
-		end
-		entry.tracer.Thickness = 1.5
-		entry.tracer.Transparency = 1
-	end
-
-	return entry.tracer
-end
-
-local function ensureHeadDot(entry)
-	if not DRAWING_SUPPORT.square then
-		return nil
-	end
-
-	if not entry.headDot then
-		entry.headDot = createDrawing("Square")
-		if not entry.headDot then
-			return nil
-		end
-		entry.headDot.Filled = true
-		entry.headDot.Transparency = 1
-	end
-
-	return entry.headDot
-end
-
-local function ensureBox(entry)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry.box then
-		entry.box = createDrawing("Square")
-		if not entry.box then
-			return nil
-		end
-		entry.box.Filled = false
-		entry.box.Thickness = 1.5
-		entry.box.Transparency = 1
-	end
-
-	return entry.box
-end
-
-function ensureHealthLines(entry)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry.healthBoxLines then
-		entry.healthBoxLines = {}
-		for _ = 1, 2 do
-			local line = createDrawing("Line")
-			if line then
-				line.Thickness = 1.5
-				line.Transparency = 1
-				table.insert(entry.healthBoxLines, line)
-			end
-		end
-
-		if #entry.healthBoxLines ~= 2 then
-			for _, line in ipairs(entry.healthBoxLines) do
-				removeDrawingObject(line)
-			end
-			entry.healthBoxLines = nil
-			return nil
-		end
-	end
-
-	return entry.healthBoxLines
-end
-
-local function ensureCornerLines(entry)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry.cornerLines then
-		entry.cornerLines = {}
-		for _ = 1, 8 do
-			local line = createDrawing("Line")
-			if line then
-				line.Thickness = 1.5
-				line.Transparency = 1
-				table.insert(entry.cornerLines, line)
-			end
-		end
-
-		if #entry.cornerLines ~= 8 then
-			for _, line in ipairs(entry.cornerLines) do
-				removeDrawingObject(line)
-			end
-			entry.cornerLines = nil
-			return nil
-		end
-	end
-
-	return entry.cornerLines
-end
-
-function ensureBoxLines(entry, key, count)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry[key] then
-		entry[key] = {}
-		for _ = 1, count do
-			local line = createDrawing("Line")
-			if line then
-				line.Thickness = 1.5
-				line.Transparency = 1
-				table.insert(entry[key], line)
-			end
-		end
-
-		if #entry[key] ~= count then
-			for _, line in ipairs(entry[key]) do
-				removeDrawingObject(line)
-			end
-			entry[key] = nil
-			return nil
-		end
-	end
-
-	return entry[key]
-end
-
-local function ensureSkeletonLines(entry)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry.skeletonLines then
-		entry.skeletonLines = {}
-		for _ = 1, #SKELETON_CONNECTIONS do
-			local line = createDrawing("Line")
-			if line then
-				line.Thickness = 1.5
-				line.Transparency = 1
-				table.insert(entry.skeletonLines, line)
-			end
-		end
-
-		if #entry.skeletonLines ~= #SKELETON_CONNECTIONS then
-			for _, line in ipairs(entry.skeletonLines) do
-				removeDrawingObject(line)
-			end
-			entry.skeletonLines = nil
-			return nil
-		end
-	end
-
-	return entry.skeletonLines
-end
-
-local function ensureLookArrowLines(entry)
-	if not drawingSupported then
-		return nil
-	end
-
-	if not entry.lookArrowLines then
-		entry.lookArrowLines = {}
-		for _ = 1, 3 do
-			local line = createDrawing("Line")
-			if line then
-				line.Thickness = 1.6
-				line.Transparency = 0.95
-				table.insert(entry.lookArrowLines, line)
-			end
-		end
-
-		if #entry.lookArrowLines ~= 3 then
-			for _, line in ipairs(entry.lookArrowLines) do
-				removeDrawingObject(line)
-			end
-			entry.lookArrowLines = nil
-			return nil
-		end
-	end
-
-	return entry.lookArrowLines
-end
-
-local function ensureCrosshairObjects()
-	if not drawingSupported then
-		return nil
-	end
-
-	if not crosshairObjects.horizontal then
-		crosshairObjects.horizontal = createDrawing("Line")
-		crosshairObjects.vertical = createDrawing("Line")
-		crosshairObjects.dot = createDrawing("Square")
-
-		if not crosshairObjects.horizontal or not crosshairObjects.vertical or not crosshairObjects.dot then
-			for _, object in pairs(crosshairObjects) do
-				if object then
-					removeDrawingObject(object)
-				end
-			end
-			crosshairObjects = {}
-			return nil
-		end
-
-		crosshairObjects.horizontal.Thickness = CONFIG.crosshairThickness
-		crosshairObjects.vertical.Thickness = CONFIG.crosshairThickness
-		crosshairObjects.horizontal.Transparency = 1
-		crosshairObjects.vertical.Transparency = 1
-		crosshairObjects.dot.Filled = true
-		crosshairObjects.dot.Transparency = 1
-	end
-
-	return crosshairObjects
-end
-
-local function ensureFovCircle()
-	if not DRAWING_SUPPORT.circle then
-		return nil
-	end
-
-	if not fovCircleObject then
-		fovCircleObject = createDrawing("Circle")
-		if not fovCircleObject then
-			return nil
-		end
-		fovCircleObject.Filled = false
-		fovCircleObject.Thickness = 1.5
-		fovCircleObject.Transparency = 0.9
-		fovCircleObject.NumSides = 48
-	end
-
-	return fovCircleObject
-end
-
-local function clearCrosshairObjects()
-	for key, object in pairs(crosshairObjects) do
-		if object then
-			object.Visible = false
-			removeDrawingObject(object)
-		end
-		crosshairObjects[key] = nil
 	end
 end
 
-local function hideFovCircle()
-	if fovCircleObject then
-		fovCircleObject.Visible = false
-	end
+if type(drawingEsp) ~= "table" then
+	error("[0xVyrs] drawing_esp module failed to load")
 end
 
-local function getCrosshairColor()
-	for _, option in ipairs(CROSSHAIR_COLOR_OPTIONS) do
-		if option.name == CONFIG.crosshairColor then
-			return option.color
-		end
-	end
-
-	return THEME.text
-end
-
-local function hideCrosshair()
-	clearCrosshairObjects()
-	hideFovCircle()
-end
-
-local function updateMouseIconVisibility()
-	local shouldShowMouseIcon = viewState.freeCamEnabled or window.Visible
-	if UserInputService.MouseIconEnabled ~= shouldShowMouseIcon then
-		UserInputService.MouseIconEnabled = shouldShowMouseIcon
-	end
-end
-
-local function updateCrosshair()
-	if not CONFIG.showCrosshair or not drawingSupported then
-		hideCrosshair()
-		updateMouseIconVisibility()
-		return
-	end
-
-	local objects = ensureCrosshairObjects()
-	if not objects then
-		updateMouseIconVisibility()
-		return
-	end
-
-	local camera = workspace.CurrentCamera
-	if not camera then
-		hideCrosshair()
-		updateMouseIconVisibility()
-		return
-	end
-
-	local viewport = camera.ViewportSize
-	local mousePosition = getMouseScreenPosition(camera)
-	if not mousePosition or not viewport then
-		hideCrosshair()
-		updateMouseIconVisibility()
-		return
-	end
-
-	local centerX = mousePosition.X
-	local centerY = mousePosition.Y
-	local size = CONFIG.crosshairSize
-	local gap = CONFIG.crosshairGap
-	local color = getCrosshairColor()
-
-	objects.horizontal.Color = color
-	objects.vertical.Color = color
-	objects.dot.Color = color
-	objects.horizontal.Thickness = CONFIG.crosshairThickness
-	objects.vertical.Thickness = CONFIG.crosshairThickness
-
-	local showCross = CONFIG.crosshairStyle == "Cross" or CONFIG.crosshairStyle == "CrossDot"
-	local showDot = CONFIG.crosshairStyle == "Dot" or CONFIG.crosshairStyle == "CrossDot"
-
-	objects.horizontal.Visible = showCross
-	objects.vertical.Visible = showCross
-	objects.dot.Visible = showDot
-
-	if showCross then
-		objects.horizontal.From = Vector2.new(centerX - size - gap, centerY)
-		objects.horizontal.To = Vector2.new(centerX + size + gap, centerY)
-		objects.vertical.From = Vector2.new(centerX, centerY - size - gap)
-		objects.vertical.To = Vector2.new(centerX, centerY + size + gap)
-	end
-
-	if showDot then
-		objects.dot.Size = Vector2.new(4, 4)
-		objects.dot.Position = Vector2.new(centerX - 2, centerY - 2)
-	end
-
-	if CONFIG.showFovCircle then
-		local fovCircle = ensureFovCircle()
-		if fovCircle then
-			fovCircle.Visible = true
-			fovCircle.Color = color
-			fovCircle.Thickness = CONFIG.fovCircleThickness
-			fovCircle.Position = Vector2.new(centerX, centerY)
-			fovCircle.Radius = CONFIG.fovRadius
-			fovCircle.Transparency = math.clamp(CONFIG.fovCircleTransparency / 100, 0.1, 1)
-		else
-			hideFovCircle()
-		end
-	else
-		hideFovCircle()
-	end
-
-	updateMouseIconVisibility()
-end
-
-local function hideBoxes(entry)
-	if entry.box then
-		entry.box.Visible = false
-	end
-
-	if entry.cornerLines then
-		for _, line in ipairs(entry.cornerLines) do
-			line.Visible = false
-		end
-	end
-
-	if entry.healthBoxLines then
-		for _, line in ipairs(entry.healthBoxLines) do
-			line.Visible = false
-		end
-	end
-
-	if entry.box3DLines then
-		for _, line in ipairs(entry.box3DLines) do
-			line.Visible = false
-		end
-	end
-
-	if entry.box3DCornerLines then
-		for _, line in ipairs(entry.box3DCornerLines) do
-			line.Visible = false
-		end
-	end
-end
-
-local function resetAllBoxEspVisuals()
-	for _, entry in pairs(espObjects) do
-		hideBoxes(entry)
-	end
-end
-
-local function hideSkeleton(entry)
-	if entry.skeletonLines then
-		for _, line in ipairs(entry.skeletonLines) do
-			line.Visible = false
-		end
-	end
-end
-
-local function getCharacterScreenBounds(camera, character)
-	local cf, size = character:GetBoundingBox()
-	local half = size / 2
-	local corners = {
-		cf * Vector3.new(-half.X, -half.Y, -half.Z),
-		cf * Vector3.new(-half.X, -half.Y, half.Z),
-		cf * Vector3.new(-half.X, half.Y, -half.Z),
-		cf * Vector3.new(-half.X, half.Y, half.Z),
-		cf * Vector3.new(half.X, -half.Y, -half.Z),
-		cf * Vector3.new(half.X, -half.Y, half.Z),
-		cf * Vector3.new(half.X, half.Y, -half.Z),
-		cf * Vector3.new(half.X, half.Y, half.Z),
-	}
-
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local visibleCorner = false
-
-	for _, corner in ipairs(corners) do
-		local point, visible = camera:WorldToViewportPoint(corner)
-		if point.Z > 0 then
-			visibleCorner = true
-			minX = math.min(minX, point.X)
-			minY = math.min(minY, point.Y)
-			maxX = math.max(maxX, point.X)
-			maxY = math.max(maxY, point.Y)
-		end
-	end
-
-	if not visibleCorner then
-		return nil
-	end
-
-	return minX, minY, maxX, maxY
-end
-
-function getPartScreenBounds(camera, part)
-	if not part then
-		return nil
-	end
-
-	local cf = part.CFrame
-	local size = part.Size
-	local half = size / 2
-	local corners = {
-		cf * Vector3.new(-half.X, -half.Y, -half.Z),
-		cf * Vector3.new(-half.X, -half.Y, half.Z),
-		cf * Vector3.new(-half.X, half.Y, -half.Z),
-		cf * Vector3.new(-half.X, half.Y, half.Z),
-		cf * Vector3.new(half.X, -half.Y, -half.Z),
-		cf * Vector3.new(half.X, -half.Y, half.Z),
-		cf * Vector3.new(half.X, half.Y, -half.Z),
-		cf * Vector3.new(half.X, half.Y, half.Z),
-	}
-
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local visibleCorner = false
-
-	for _, corner in ipairs(corners) do
-		local point, visible = camera:WorldToViewportPoint(corner)
-		if point.Z > 0 then
-			visibleCorner = true
-			minX = math.min(minX, point.X)
-			minY = math.min(minY, point.Y)
-			maxX = math.max(maxX, point.X)
-			maxY = math.max(maxY, point.Y)
-		end
-	end
-
-	if not visibleCorner then
-		return nil
-	end
-
-	return minX, minY, maxX, maxY
-end
-
-function getBoundingBoxViewportCorners(camera, character)
-	local cf, size = character:GetBoundingBox()
-	local half = size / 2
-	local worldCorners = {
-		cf * Vector3.new(-half.X, -half.Y, -half.Z),
-		cf * Vector3.new(-half.X, -half.Y, half.Z),
-		cf * Vector3.new(-half.X, half.Y, -half.Z),
-		cf * Vector3.new(-half.X, half.Y, half.Z),
-		cf * Vector3.new(half.X, -half.Y, -half.Z),
-		cf * Vector3.new(half.X, -half.Y, half.Z),
-		cf * Vector3.new(half.X, half.Y, -half.Z),
-		cf * Vector3.new(half.X, half.Y, half.Z),
-	}
-
-	local projected = {}
-	for index, worldCorner in ipairs(worldCorners) do
-		local point = camera:WorldToViewportPoint(worldCorner)
-		if point.Z <= 0 then
-			return nil
-		end
-		projected[index] = Vector2.new(point.X, point.Y)
-	end
-
-	return projected
-end
-
-function render3DBoxEdges(lines, corners, color, thickness)
-	for index, edge in ipairs(BOX_3D_EDGES) do
-		local line = lines[index]
-		local fromPoint = corners[edge[1]]
-		local toPoint = corners[edge[2]]
-		line.Visible = true
-		line.Color = color
-		line.Thickness = thickness
-		line.From = fromPoint
-		line.To = toPoint
-	end
-end
-
-function render3DCornerEdges(lines, corners, color, thickness)
-	local lineIndex = 1
-	for _, edge in ipairs(BOX_3D_EDGES) do
-		local fromPoint = corners[edge[1]]
-		local toPoint = corners[edge[2]]
-		local delta = toPoint - fromPoint
-		local edgeLength = delta.Magnitude
-		local segmentLength = edgeLength * 0.28
-		if edgeLength > 0.001 then
-			local direction = delta.Unit
-			local firstLine = lines[lineIndex]
-			firstLine.Visible = true
-			firstLine.Color = color
-			firstLine.Thickness = thickness
-			firstLine.From = fromPoint
-			firstLine.To = fromPoint + (direction * segmentLength)
-
-			local secondLine = lines[lineIndex + 1]
-			secondLine.Visible = true
-			secondLine.Color = color
-			secondLine.Thickness = thickness
-			secondLine.From = toPoint
-			secondLine.To = toPoint - (direction * segmentLength)
-		else
-			lines[lineIndex].Visible = false
-			lines[lineIndex + 1].Visible = false
-		end
-		lineIndex = lineIndex + 2
-	end
-end
-
-local function updateBoxEsp(entry, camera, character, color, fillColor)
-	local effectiveBoxMode = getEffectiveBoxMode()
-
-	if isChamsBoxMode(effectiveBoxMode) then
-		hideBoxes(entry)
-		return
-	end
-
-	local root = getCharacterRoot(character)
-	local localRoot = LOCAL_PLAYER.Character and getCharacterRoot(LOCAL_PLAYER.Character)
-	local distance = (root and localRoot) and (root.Position - localRoot.Position).Magnitude or CONFIG.maxDistance
-	local thickness = math.clamp(2.6 - ((distance / math.max(CONFIG.maxDistance, 1)) * 1.4), 1, 2.6)
-	local head = character:FindFirstChild("Head")
-
-	local minX, minY, maxX, maxY
-	if effectiveBoxMode == "Head Box" then
-		if not head then
-			hideBoxes(entry)
-			return
-		end
-		minX, minY, maxX, maxY = getPartScreenBounds(camera, head)
-	else
-		minX, minY, maxX, maxY = getCharacterScreenBounds(camera, character)
-	end
-
-	if effectiveBoxMode ~= "3D Box" and effectiveBoxMode ~= "3D Corner" and not minX then
-		hideBoxes(entry)
-		return
-	end
-
-	hideBoxes(entry)
-
-	if effectiveBoxMode == "2D Box" then
-		local box = ensureBox(entry)
-		if not box then
-			return
-		end
-		box.Filled = false
-		box.Thickness = thickness
-		box.Visible = true
-		box.Color = color
-		box.Transparency = 1
-		box.Position = Vector2.new(minX, minY)
-		box.Size = Vector2.new(math.max(maxX - minX, 2), math.max(maxY - minY, 2))
-	elseif effectiveBoxMode == "Health Box" then
-		local box = ensureBox(entry)
-		local healthLines = ensureHealthLines(entry)
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if not box or not healthLines or not humanoid then
-			return
-		end
-
-		local width = math.max(maxX - minX, 2)
-		local height = math.max(maxY - minY, 2)
-		local healthRatio = humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 1
-		local healthColor = Color3.fromRGB(
-			math.floor(255 - (155 * healthRatio)),
-			math.floor(70 + (185 * healthRatio)),
-			math.floor(88 - (32 * healthRatio))
-		)
-
-		box.Filled = false
-		box.Thickness = thickness
-		box.Visible = true
-		box.Color = color
-		box.Transparency = 1
-		box.Position = Vector2.new(minX, minY)
-		box.Size = Vector2.new(width, height)
-
-		healthLines[1].Visible = true
-		healthLines[1].Color = Color3.fromRGB(28, 31, 40)
-		healthLines[1].Thickness = math.max(2, thickness + 0.8)
-		healthLines[1].From = Vector2.new(minX - 5, minY)
-		healthLines[1].To = Vector2.new(minX - 5, maxY)
-
-		healthLines[2].Visible = true
-		healthLines[2].Color = healthColor
-		healthLines[2].Thickness = math.max(2, thickness)
-		healthLines[2].From = Vector2.new(minX - 5, maxY)
-		healthLines[2].To = Vector2.new(minX - 5, maxY - (height * healthRatio))
-	elseif effectiveBoxMode == "Corner Box" then
-		local lines = ensureCornerLines(entry)
-		if not lines then
-			return
-		end
-
-		local width = math.max(maxX - minX, 2)
-		local height = math.max(maxY - minY, 2)
-		local cornerWidth = width * 0.25
-		local cornerHeight = height * 0.25
-		local segments = {
-			{ Vector2.new(minX, minY), Vector2.new(minX + cornerWidth, minY) },
-			{ Vector2.new(minX, minY), Vector2.new(minX, minY + cornerHeight) },
-			{ Vector2.new(maxX, minY), Vector2.new(maxX - cornerWidth, minY) },
-			{ Vector2.new(maxX, minY), Vector2.new(maxX, minY + cornerHeight) },
-			{ Vector2.new(minX, maxY), Vector2.new(minX + cornerWidth, maxY) },
-			{ Vector2.new(minX, maxY), Vector2.new(minX, maxY - cornerHeight) },
-			{ Vector2.new(maxX, maxY), Vector2.new(maxX - cornerWidth, maxY) },
-			{ Vector2.new(maxX, maxY), Vector2.new(maxX, maxY - cornerHeight) },
-		}
-
-		for index, line in ipairs(lines) do
-			local segment = segments[index]
-			line.Visible = true
-			line.Color = color
-			line.Thickness = math.clamp(thickness + 0.2, 1, 2.8)
-			line.From = segment[1]
-			line.To = segment[2]
-		end
-	elseif effectiveBoxMode == "Head Box" then
-		local box = ensureBox(entry)
-		if not box then
-			return
-		end
-		box.Filled = false
-		box.Thickness = math.clamp(thickness + 0.15, 1, 2.8)
-		box.Visible = true
-		box.Color = color
-		box.Transparency = 1
-		box.Position = Vector2.new(minX, minY)
-		box.Size = Vector2.new(math.max(maxX - minX, 2), math.max(maxY - minY, 2))
-	elseif effectiveBoxMode == "3D Box" then
-		local corners = getBoundingBoxViewportCorners(camera, character)
-		local lines = ensureBoxLines(entry, "box3DLines", #BOX_3D_EDGES)
-		if not corners or not lines then
-			hideBoxes(entry)
-			return
-		end
-		render3DBoxEdges(lines, corners, color, math.clamp(thickness, 1, 2.4))
-	elseif effectiveBoxMode == "3D Corner" then
-		local corners = getBoundingBoxViewportCorners(camera, character)
-		local lines = ensureBoxLines(entry, "box3DCornerLines", #BOX_3D_EDGES * 2)
-		if not corners or not lines then
-			hideBoxes(entry)
-			return
-		end
-		render3DCornerEdges(lines, corners, color, math.clamp(thickness + 0.1, 1, 2.5))
-	end
-end
-
-local function updateSkeletonEsp(entry, camera, character, color)
-	if not CONFIG.showSkeleton then
-		hideSkeleton(entry)
-		return
-	end
-
-	local lines = ensureSkeletonLines(entry)
-	if not lines then
-		hideSkeleton(entry)
-		return
-	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local healthRatio = humanoid and humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 1
-	local skeletonColor = CONFIG.showHealth and Color3.fromRGB(
-		math.floor(255 - (155 * healthRatio)),
-		math.floor(70 + (185 * healthRatio)),
-		math.floor(88 - (32 * healthRatio))
-	) or color
-	for index, connection in ipairs(SKELETON_CONNECTIONS) do
-		local fromPart = character:FindFirstChild(connection[1])
-		local toPart = character:FindFirstChild(connection[2])
-		local line = lines[index]
-
-		if fromPart and toPart then
-			local fromPoint = camera:WorldToViewportPoint(fromPart.Position)
-			local toPoint = camera:WorldToViewportPoint(toPart.Position)
-			if fromPoint.Z > 0 and toPoint.Z > 0 then
-				line.Visible = true
-				line.Color = skeletonColor
-				line.From = Vector2.new(fromPoint.X, fromPoint.Y)
-				line.To = Vector2.new(toPoint.X, toPoint.Y)
-			else
-				line.Visible = false
-			end
-		else
-			line.Visible = false
-		end
-	end
-end
-
-local function updateLookDirectionEsp(entry, camera, character, root, color)
-	if not CONFIG.showLookDirection or not isFocusedTarget(entry.player) then
-		if entry.lookArrowLines then
-			for _, line in ipairs(entry.lookArrowLines) do
-				line.Visible = false
-			end
-		end
-		return
-	end
-
-	local arrowLines = ensureLookArrowLines(entry)
-	if not arrowLines then
-		return
-	end
-
-	local head = character:FindFirstChild("Head")
-	local originWorld = (head and head.Position or root.Position) + Vector3.new(0, head and 0.15 or 0.55, 0)
-	local tipWorld = originWorld + root.CFrame.LookVector * 1.8
-	local tipPoint = camera:WorldToViewportPoint(tipWorld)
-	local originPoint = camera:WorldToViewportPoint(originWorld)
-
-	if originPoint.Z > 0 and tipPoint.Z > 0 then
-		local tip = Vector2.new(tipPoint.X, tipPoint.Y)
-		local origin = Vector2.new(originPoint.X, originPoint.Y)
-		local direction = tip - origin
-		if direction.Magnitude < 1 then
-			for _, line in ipairs(arrowLines) do
-				line.Visible = false
-			end
-			return
-		end
-
-		direction = direction.Unit
-		local backward = -direction
-		local perpendicular = Vector2.new(-direction.Y, direction.X)
-		local stemStart = tip + backward * 11
-		local wingLength = 9
-		local wingWidth = 5
-		local leftWingEnd = tip + backward * wingLength + perpendicular * wingWidth
-		local rightWingEnd = tip + backward * wingLength - perpendicular * wingWidth
-
-		arrowLines[1].Visible = true
-		arrowLines[1].Color = color
-		arrowLines[1].From = stemStart
-		arrowLines[1].To = tip
-
-		arrowLines[2].Visible = true
-		arrowLines[2].Color = color
-		arrowLines[2].From = tip
-		arrowLines[2].To = leftWingEnd
-
-		arrowLines[3].Visible = true
-		arrowLines[3].Color = color
-		arrowLines[3].From = tip
-		arrowLines[3].To = rightWingEnd
-	else
-		for _, line in ipairs(arrowLines) do
-			line.Visible = false
-		end
-	end
-end
-
-
-local function isPlayerVisible(character, root)
-	if not CONFIG.visibilityCheck then
-		return true
-	end
-
-	local localCharacter = LOCAL_PLAYER.Character
-	if not localCharacter then
-		return false
-	end
-
-	local camera = getCamera()
-	if not camera then
-		return false
-	end
-
-	local origin = camera.CFrame.Position
-	local targetPart = character:FindFirstChild("Head") or root
-	local direction = targetPart.Position - origin
-
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = { localCharacter }
-	params.IgnoreWater = true
-
-	local result = workspace:Raycast(origin, direction, params)
-	return not result or result.Instance:IsDescendantOf(character)
-end
-
-local function getDisplayColor(baseColor, isVisible)
-	if not CONFIG.visibilityCheck then
-		return baseColor
-	end
-
-	return isVisible and CONFIG.visibleColor or CONFIG.hiddenColor
-end
-
-local function getDistanceFade(distance)
-	if not CONFIG.distanceFade then
-		return 1
-	end
-
-	local alpha = 1 - math.clamp(distance / math.max(CONFIG.maxDistance, 1), 0, 1)
-	return 0.35 + (alpha * 0.65)
-end
-
-local function getRainbowColor()
-	local hue = (tick() * 0.2) % 1
-	return Color3.fromHSV(hue, 0.85, 1)
-end
-
-local function updateDevAura(entry, character, rainbowColor)
-	if not entry.billboard then
-		return
-	end
-
-	local pulse = (math.sin(tick() * 3.2) + 1) * 0.5
-	local ring = entry.devRing
-
-	if ring then
-		ring.Visible = true
-		ring.BackgroundColor3 = rainbowColor
-		ring.BackgroundTransparency = 0.8 - (pulse * 0.12)
-		ring.Size = UDim2.new(0, math.floor(68 + pulse * 14), 0, math.floor(16 + pulse * 4))
-		local ringGradient = ring:FindFirstChildOfClass("UIGradient")
-		if ringGradient then
-			ringGradient.Rotation = (tick() * -150) % 360
-		end
-	end
-end
-
-local function hideDevAura(entry)
-	if entry.devRing then
-		entry.devRing.Visible = false
-	end
-end
-
-local function updateBillboardEsp(entry, player, character, distance, focusTarget, showDevTag, devRainbowColor, espColor, distanceFade)
-	if not (CONFIG.showNames or CONFIG.showDistance or CONFIG.showHealth or showDevTag) then
-		if entry.billboard then
-			entry.billboard:Destroy()
-			entry.billboard = nil
-			entry.title = nil
-			entry.healthBack = nil
-			entry.healthFill = nil
-			entry.devRing = nil
-		end
-		return
-	end
-
-	local _, title = ensureBillboard(entry, character)
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local labelParts = {}
-
-	if showDevTag then
-		table.insert(labelParts, DEV_TAG_TEXT)
-	elseif CONFIG.showNames then
-		table.insert(labelParts, player.Name)
-	end
-
-	if not showDevTag and CONFIG.showDistance then
-		table.insert(labelParts, string.format("[%dm]", distance))
-	end
-
-	if not showDevTag and CONFIG.showHealth and humanoid then
-		table.insert(labelParts, string.format("[%d HP]", math.max(0, math.floor(humanoid.Health))))
-	end
-
-	if not showDevTag and CONFIG.showWeapon then
-		local heldTool = getHeldToolName(character)
-		if heldTool then
-			table.insert(labelParts, "[" .. heldTool .. "]")
-		end
-	end
-
-	local labelText = table.concat(labelParts, CONFIG.textStackMode == "Stacked" and "\n" or " ")
-	title.Text = focusTarget and ("[TARGET] " .. labelText) or labelText
-	if showDevTag then
-		title.TextColor3 = devRainbowColor
-		title.TextTransparency = 0
-		updateDevAura(entry, character, devRainbowColor)
-	else
-		title.TextColor3 = focusTarget and THEME.focus or espColor
-		title.TextTransparency = math.clamp((1 - distanceFade) * 0.65, 0, 0.65)
-		hideDevAura(entry)
-	end
-	entry.billboard.Size = CONFIG.textStackMode == "Stacked" and UDim2.new(0, 180, 0, 42) or UDim2.new(0, 180, 0, 30)
-
-	if entry.healthBack and entry.healthFill and humanoid then
-		local healthPercent = 0
-		if humanoid.MaxHealth > 0 then
-			healthPercent = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
-		end
-
-		entry.healthBack.Visible = CONFIG.showHealth
-		entry.healthFill.Size = UDim2.new(healthPercent, 0, 1, 0)
-		entry.healthFill.BackgroundColor3 = showDevTag and devRainbowColor or (focusTarget and THEME.focus or Color3.fromRGB(
-			math.floor(255 - (155 * healthPercent)),
-			math.floor(70 + (185 * healthPercent)),
-			math.floor(88 - (32 * healthPercent))
-		))
-	elseif entry.healthBack then
-		entry.healthBack.Visible = false
-	end
-end
-
-local function updateTracerEsp(entry, root, camera, tracerColor, focusTarget, distance, distanceFade)
-	if CONFIG.showTracers and drawingSupported then
-		if not camera then
-			return
-		end
-
-		local tracer = ensureTracer(entry)
-		if not tracer then
-			return
-		end
-		local screenPoint, visible = camera:WorldToViewportPoint(root.Position)
-		local tracerOrigin = getTracerOrigin(camera)
-
-		if visible and tracerOrigin then
-			tracer.Visible = true
-			tracer.Color = tracerColor
-			tracer.Thickness = math.clamp(CONFIG.tracerThickness + (focusTarget and 0.6 or 0) - ((distance / math.max(CONFIG.maxDistance, 1)) * 0.9), 1, 4)
-			tracer.Transparency = math.clamp((CONFIG.tracerTransparency / 100) * distanceFade, 0.1, 1)
-			if CONFIG.tracerStyle == "Split" then
-				local midPoint = Vector2.new((tracerOrigin.X + screenPoint.X) * 0.5, tracerOrigin.Y + ((screenPoint.Y - tracerOrigin.Y) * 0.2))
-				tracer.From = tracerOrigin
-				tracer.To = midPoint
-				if not entry.tracerBranch then
-					entry.tracerBranch = createDrawing("Line")
-				end
-				if entry.tracerBranch then
-					entry.tracerBranch.Visible = true
-					entry.tracerBranch.Color = tracerColor
-					entry.tracerBranch.Thickness = tracer.Thickness
-					entry.tracerBranch.Transparency = tracer.Transparency
-					entry.tracerBranch.From = midPoint
-					entry.tracerBranch.To = Vector2.new(screenPoint.X, screenPoint.Y)
-				end
-			else
-				tracer.From = tracerOrigin
-				tracer.To = Vector2.new(screenPoint.X, screenPoint.Y)
-				if entry.tracerBranch then
-					entry.tracerBranch.Visible = false
-				end
-			end
-		else
-			tracer.Visible = false
-			if entry.tracerBranch then
-				entry.tracerBranch.Visible = false
-			end
-		end
-	elseif entry.tracer then
-		entry.tracer.Visible = false
-		if entry.tracerBranch then
-			entry.tracerBranch.Visible = false
-		end
-	end
-end
-
-local function updateHeadDotEsp(entry, character, camera, distanceFade, outlineColor, showDevTag, devRainbowColor)
-	if CONFIG.showHeadDot and camera then
-		local head = character:FindFirstChild("Head")
-		local headDot = ensureHeadDot(entry)
-		if head and headDot then
-			local headPoint, headVisible = camera:WorldToViewportPoint(head.Position)
-			if headVisible and headPoint.Z > 0 then
-				local dotSize = math.max(2, math.floor((CONFIG.headDotSize * 0.55) + (distanceFade * CONFIG.headDotSize * 0.45)))
-				headDot.Visible = true
-				headDot.Color = showDevTag and devRainbowColor or outlineColor
-				headDot.Size = Vector2.new(dotSize, dotSize)
-				headDot.Position = Vector2.new(headPoint.X - (dotSize * 0.5), headPoint.Y - (dotSize * 0.5))
-				headDot.Transparency = math.clamp(0.3 + (distanceFade * 0.7), 0.2, 1)
-			else
-				headDot.Visible = false
-			end
-		elseif entry.headDot then
-			entry.headDot.Visible = false
-		end
-	elseif entry.headDot then
-		entry.headDot.Visible = false
-	end
-end
-
+clearEntry = drawingEsp.clearEntry
+clearPlayerEsp = drawingEsp.clearPlayerEsp
+resetAllBoxEspVisuals = drawingEsp.resetAllBoxEspVisuals
+updateCrosshair = drawingEsp.updateCrosshair
+hideCrosshair = drawingEsp.hideCrosshair
+updateMouseIconVisibility = drawingEsp.updateMouseIconVisibility
 do
 	local playerEspFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\player_esp.lua", PLAYER_ESP_MODULE_SOURCE)
 	if type(playerEspFactory) == "function" then
@@ -8795,28 +4013,28 @@ do
 			LOCAL_PLAYER = LOCAL_PLAYER,
 			THEME = THEME,
 			DEV_TAG_DISTANCE = DEV_TAG_DISTANCE,
-			getEspEntry = getEspEntry,
+			getEspEntry = drawingEsp.getEspEntry,
 			clearEntry = clearEntry,
 			shouldTrackPlayer = shouldTrackPlayer,
 			getCharacterRoot = getCharacterRoot,
 			getEspColor = getEspColor,
-			isPlayerVisible = isPlayerVisible,
-			getDisplayColor = getDisplayColor,
-			getDistanceFade = getDistanceFade,
+			isPlayerVisible = drawingEsp.isPlayerVisible,
+			getDisplayColor = drawingEsp.getDisplayColor,
+			getDistanceFade = drawingEsp.getDistanceFade,
 			isFocusedTarget = isFocusedTarget,
 			isDevPlayer = isDevPlayer,
-			getRainbowColor = getRainbowColor,
+			getRainbowColor = drawingEsp.getRainbowColor,
 			getTargetThreatData = getTargetThreatData,
 			getTracerColor = getTracerColor,
 			getCamera = getCamera,
 			getEffectiveBoxMode = getEffectiveBoxMode,
-			ensureHighlight = ensureHighlight,
-			updateBoxEsp = updateBoxEsp,
-			updateSkeletonEsp = updateSkeletonEsp,
-			updateLookDirectionEsp = updateLookDirectionEsp,
-			updateBillboardEsp = updateBillboardEsp,
-			updateTracerEsp = updateTracerEsp,
-			updateHeadDotEsp = updateHeadDotEsp,
+			ensureHighlight = drawingEsp.ensureHighlight,
+			updateBoxEsp = drawingEsp.updateBoxEsp,
+			updateSkeletonEsp = drawingEsp.updateSkeletonEsp,
+			updateLookDirectionEsp = drawingEsp.updateLookDirectionEsp,
+			updateBillboardEsp = drawingEsp.updateBillboardEsp,
+			updateTracerEsp = drawingEsp.updateTracerEsp,
+			updateHeadDotEsp = drawingEsp.updateHeadDotEsp,
 		})
 		if type(playerEspModule) == "table" and type(playerEspModule.updatePlayerEsp) == "function" then
 			playerEspRenderer = playerEspModule.updatePlayerEsp
@@ -8829,427 +4047,79 @@ local function updatePlayerEsp(player, precomputed)
 		return playerEspRenderer(player, precomputed)
 	end
 
-	clearEntry(getEspEntry(player))
+	clearEntry(drawingEsp.getEspEntry(player))
 end
 
-local function updatePerfStatsUi()
-	if not miniHudLabels.perfStats then
-		return
-	end
-
-	miniHudLabels.perfStats.fps.Text = tostring(math.max(0, math.floor(currentFps + 0.5)))
-	miniHudLabels.perfStats.visible.Text = tostring(visibleEnemyCount)
-	miniHudLabels.perfStats.tracked.Text = tostring(trackedEnemyCount)
-	miniHudLabels.perfStats.update.Text = string.format("%.1fms", lastRefreshMs)
-
-	if miniHudLabels.status then
-		miniHudLabels.status.Text = CONFIG.enabled and "ONLINE" or "OFFLINE"
-		miniHudLabels.status.TextColor3 = CONFIG.enabled and THEME.accent or THEME.muted
-		miniHudLabels.fps.Text = string.format("%d | %.1fms", math.max(0, math.floor(currentFps + 0.5)), lastRefreshMs)
-		miniHudLabels.fps.TextColor3 = THEME.text
-		miniHudLabels.targets.Text = string.format("%d visible / %d tracked", visibleEnemyCount, trackedEnemyCount)
-		if CONFIG.showFocusTarget and focusedPlayer then
-			miniHudLabels.focus.Text = truncateText(focusedPlayer.Name, 18)
-			miniHudLabels.focus.TextColor3 = THEME.focus
-		else
-			miniHudLabels.focus.Text = "None"
-			miniHudLabels.focus.TextColor3 = THEME.text
-		end
-	end
-
-	if tracerSliders.targetInfo then
-		local compactTargetCard = CONFIG.targetCardCompact or CONFIG.minimalMode
-		local targetCardHeight = compactTargetCard and 58 or 76
-		if tracerSliders.targetCard then
-			tracerSliders.targetCard.Size = UDim2.new(0, 228, 0, targetCardHeight)
-			tracerSliders.targetCard.Visible = uiReady and gui.Enabled and CONFIG.showTargetCard
-		end
-		if focusedPlayer and CONFIG.showTargetCard then
-			local character = focusedPlayer.Character
-			local root = character and getCharacterRoot(character)
-			local localCharacter = LOCAL_PLAYER.Character
-			local localRoot = localCharacter and getCharacterRoot(localCharacter)
-			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			local details = {}
-			local detailsSecondary = {}
-			local telemetry = miniHudLabels.utility.targetTelemetry[focusedPlayer] or {}
-
-			if humanoid then
-				table.insert(details, string.format("%d HP", math.max(0, math.floor(humanoid.Health))))
-			end
-
-			if root and localRoot then
-				table.insert(details, string.format("%d m", math.floor((root.Position - localRoot.Position).Magnitude + 0.5)))
-			end
-
-			if character then
-				local heldTool = getHeldToolName(character)
-				if heldTool then
-					table.insert(details, truncateText(heldTool, 12))
-				end
-			end
-
-			if telemetry.visible ~= nil then
-				table.insert(detailsSecondary, telemetry.visible and "Visible" or "Hidden")
-			end
-
-			if telemetry.movementState then
-				table.insert(detailsSecondary, telemetry.movementState)
-			end
-
-			if telemetry.groupDanger then
-				table.insert(detailsSecondary, string.format("Group %d", telemetry.groupDanger))
-			end
-
-			if telemetry.lastDamageAt then
-				table.insert(detailsSecondary, string.format("Hit %.1fs", math.max(0, tick() - telemetry.lastDamageAt)))
-			end
-
-			tracerSliders.targetInfo.Text = truncateText(focusedPlayer.Name, 18)
-			tracerSliders.targetInfo.TextColor3 = THEME.focus
-			if tracerSliders.targetInfoMeta then
-				tracerSliders.targetInfoMeta.Text = #details > 0 and truncateText(table.concat(details, "  |  "), 46) or "Tracked target"
-				tracerSliders.targetInfoMeta.TextColor3 = THEME.muted
-			end
-			if tracerSliders.targetInfoMeta2 then
-				tracerSliders.targetInfoMeta2.Text = #detailsSecondary > 0 and truncateText(table.concat(detailsSecondary, "  |  "), 46) or "Awaiting telemetry"
-				tracerSliders.targetInfoMeta2.TextColor3 = telemetry.aimingAtYou and THEME.focus or THEME.muted
-			end
-			if tracerSliders.targetBadge then
-				tracerSliders.targetBadge.Text = telemetry.aimingAtYou and string.format("AIMING | %d", telemetry.dangerScore or 0) or string.format("DANGER %d", telemetry.dangerScore or 0)
-				tracerSliders.targetBadge.TextColor3 = telemetry.aimingAtYou and THEME.focus or THEME.text
-				tracerSliders.targetBadge.BackgroundColor3 = telemetry.aimingAtYou and Color3.fromRGB(86, 71, 28) or Color3.fromRGB(35, 40, 53)
-			end
-			if tracerSliders.targetInfoMeta2 then
-				tracerSliders.targetInfoMeta2.Visible = not compactTargetCard
-			end
-		else
-			tracerSliders.targetInfo.Text = "NONE"
-			tracerSliders.targetInfo.TextColor3 = THEME.text
-			if tracerSliders.targetInfoMeta then
-				tracerSliders.targetInfoMeta.Text = "No focus target"
-				tracerSliders.targetInfoMeta.TextColor3 = THEME.muted
-			end
-			if tracerSliders.targetInfoMeta2 then
-				tracerSliders.targetInfoMeta2.Text = "--"
-				tracerSliders.targetInfoMeta2.TextColor3 = THEME.muted
-				tracerSliders.targetInfoMeta2.Visible = not compactTargetCard
-			end
-			if tracerSliders.targetBadge then
-				tracerSliders.targetBadge.Text = "NO LOCK"
-				tracerSliders.targetBadge.TextColor3 = THEME.muted
-				tracerSliders.targetBadge.BackgroundColor3 = Color3.fromRGB(35, 40, 53)
-			end
-		end
-	end
-
-	if tracerSliders.trainingStatus then
-		local trainer = miniHudLabels.utility.trainer
-		local activeTrainerPreset = getActiveTrainerPresetName()
-		local trainerAccent = activeTrainerPreset and getTrainerPresetColor(activeTrainerPreset) or (CONFIG.trainerDrillType == "Track" and THEME.focus or THEME.accent)
-		local clickShots = math.max(1, (trainer.clickHits or 0) + (trainer.clickMisses or 0))
-		local clickAverage = (trainer.clickHits or 0) > 0 and math.floor((trainer.clickTotalMs or 0) / math.max(trainer.clickHits, 1) + 0.5) or nil
-		local trackAverage = (trainer.trackHits or 0) > 0 and math.floor((trainer.trackTotalMs or 0) / math.max(trainer.trackHits, 1) + 0.5) or nil
-		if CONFIG.aimTrainerMode then
-			local parts = {}
-			local totalShots = math.max(1, (trainer.hits or 0) + (trainer.misses or 0))
-			if CONFIG.trainerReactionTimer and trainer.lastReactionMs then
-				table.insert(parts, string.format("%dMS", trainer.lastReactionMs))
-			end
-			table.insert(parts, CONFIG.trainerDrillType == "Track" and "TRACK" or "CLICK")
-			table.insert(parts, string.format("H %d", trainer.hits or 0))
-			if CONFIG.trainerDrillType == "Click" then
-				table.insert(parts, string.format("M %d", trainer.misses or 0))
-				table.insert(parts, string.format("ACC %d%%", math.floor(((trainer.hits or 0) / totalShots) * 100 + 0.5)))
-			else
-				table.insert(parts, string.format("HOLD %d%%", math.floor((math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress or 0) / math.max(CONFIG.trainerTrackHoldTime, 1)) * 100 + 0.5)))
-			end
-			if trainer.bestReactionMs then
-				table.insert(parts, string.format("BEST %d", trainer.bestReactionMs))
-			end
-			if not activeTrainerPreset then
-				table.insert(parts, "CUSTOM")
-			end
-			if CONFIG.trainerChallengeMode and trainer.challengeEndsAt then
-				table.insert(parts, string.format("T %d", math.max(0, math.ceil(trainer.challengeEndsAt - tick()))))
-			end
-			tracerSliders.trainingStatus.Text = table.concat(parts, " | ")
-			tracerSliders.trainingStatus.TextColor3 = THEME.focus
-		else
-			tracerSliders.trainingStatus.Text = "OFF"
-			tracerSliders.trainingStatus.TextColor3 = THEME.text
-		end
-
-		if tracerSliders.trainingCards then
-			local clickCard = tracerSliders.trainingCards.click
-			local trackCard = tracerSliders.trainingCards.track
-			local clickActive = CONFIG.trainerDrillType == "Click"
-			local trackActive = CONFIG.trainerDrillType == "Track"
-			local clickStroke = clickCard.frame:FindFirstChildOfClass("UIStroke")
-			local trackStroke = trackCard.frame:FindFirstChildOfClass("UIStroke")
-
-			clickCard.badge.Text = CONFIG.aimTrainerMode and (clickActive and "LIVE" or "READY") or "IDLE"
-			clickCard.badge.BackgroundColor3 = clickActive and THEME.accentSoft or Color3.fromRGB(35, 40, 53)
-			clickCard.badge.TextColor3 = clickActive and THEME.text or THEME.muted
-			clickCard.lines[1].Text = string.format("Hits %d | Misses %d", trainer.clickHits or 0, trainer.clickMisses or 0)
-			clickCard.lines[2].Text = string.format("Accuracy %d%% | Avg %s", math.floor(((trainer.clickHits or 0) / clickShots) * 100 + 0.5), clickAverage and (tostring(clickAverage) .. "ms") or "--")
-			clickCard.lines[3].Text = string.format("Best %s | Last %s", trainer.clickBestMs and (tostring(trainer.clickBestMs) .. "ms") or "--", trainer.lastReactionMs and clickActive and (tostring(trainer.lastReactionMs) .. "ms") or "--")
-			clickCard.lines[4].Text = string.format("Streak %d | Peak %d", trainer.clickStreak or 0, trainer.clickBestStreak or 0)
-			clickCard.frame.BackgroundColor3 = clickActive and Color3.fromRGB(25, 32, 44) or Color3.fromRGB(22, 27, 37)
-			if clickStroke then
-				clickStroke.Transparency = clickActive and 0.18 or 0.72
-			end
-
-			trackCard.badge.Text = CONFIG.aimTrainerMode and (trackActive and "LIVE" or "READY") or "IDLE"
-			trackCard.badge.BackgroundColor3 = trackActive and Color3.fromRGB(86, 71, 28) or Color3.fromRGB(35, 40, 53)
-			trackCard.badge.TextColor3 = trackActive and THEME.text or THEME.muted
-			trackCard.lines[1].Text = string.format("Tracks %d | Breaks %d", trainer.trackHits or 0, trainer.trackBreaks or 0)
-			trackCard.lines[2].Text = string.format("Avg %s | Best %s", trackAverage and (tostring(trackAverage) .. "ms") or "--", trainer.trackBestMs and (tostring(trainer.trackBestMs) .. "ms") or "--")
-			trackCard.lines[3].Text = string.format("Hold %d%% | Req %0.1fs", math.floor((math.min(CONFIG.trainerTrackHoldTime, trainer.holdProgress or 0) / math.max(CONFIG.trainerTrackHoldTime, 1)) * 100 + 0.5), CONFIG.trainerTrackHoldTime)
-			trackCard.lines[4].Text = string.format("Speed %d | Streak %d/%d", CONFIG.trainerTargetSpeed, trainer.trackStreak or 0, trainer.trackBestStreak or 0)
-			trackCard.frame.BackgroundColor3 = trackActive and Color3.fromRGB(40, 35, 23) or Color3.fromRGB(22, 27, 37)
-			if trackStroke then
-				trackStroke.Transparency = trackActive and 0.18 or 0.72
-			end
-		end
-
-		if tracerSliders.trainingResultsRow and tracerSliders.trainingResults then
-			local results = miniHudLabels.utility.trainer.lastResults
-			tracerSliders.trainingResultsRow.Visible = results ~= nil
-			if results then
-				tracerSliders.trainingResultsRow.BackgroundColor3 = trainerAccent:Lerp(Color3.fromRGB(20, 24, 33), 0.78)
-				local resultsStroke = tracerSliders.trainingResultsRow:FindFirstChildOfClass("UIStroke")
-				if resultsStroke then
-					resultsStroke.Color = trainerAccent
-					resultsStroke.Transparency = 0.3
-				end
-				tracerSliders.trainingResults.badge.Text = string.upper(results.drill or "RUN")
-				tracerSliders.trainingResults.badge.BackgroundColor3 = trainerAccent:Lerp(Color3.fromRGB(255, 255, 255), 0.18)
-				tracerSliders.trainingResults.badge.TextColor3 = THEME.text
-				tracerSliders.trainingResults.lines[1].Text = string.format("Hits %d | Misses %d | Accuracy %d%%", results.hits or 0, results.misses or 0, results.accuracy or 0)
-				tracerSliders.trainingResults.lines[2].Text = string.format("Click Avg %s | Click Best %s", results.clickAverage and (tostring(results.clickAverage) .. "ms") or "--", results.clickBest and (tostring(results.clickBest) .. "ms") or "--")
-				tracerSliders.trainingResults.lines[3].Text = string.format("Track Avg %s | Track Best %s", results.trackAverage and (tostring(results.trackAverage) .. "ms") or "--", results.trackBest and (tostring(results.trackBest) .. "ms") or "--")
-				tracerSliders.trainingResults.lines[4].Text = string.format("Click Peak %d | Track Peak %d | Breaks %d", results.clickPeak or 0, results.trackPeak or 0, results.trackBreaks or 0)
-			else
-				tracerSliders.trainingResultsRow.BackgroundColor3 = THEME.panelAlt
-				local resultsStroke = tracerSliders.trainingResultsRow:FindFirstChildOfClass("UIStroke")
-				if resultsStroke then
-					resultsStroke.Color = THEME.border
-					resultsStroke.Transparency = 0.45
-				end
-			end
-		end
-
-		if tracerSliders.trainingHistoryRow and tracerSliders.trainingHistory then
-			local history = miniHudLabels.utility.trainer.history or {}
-			tracerSliders.trainingHistoryRow.Visible = #history > 0
-			tracerSliders.trainingHistoryRow.BackgroundColor3 = #history > 0 and trainerAccent:Lerp(Color3.fromRGB(20, 24, 33), 0.82) or THEME.panelAlt
-			local historyStroke = tracerSliders.trainingHistoryRow:FindFirstChildOfClass("UIStroke")
-			if historyStroke then
-				historyStroke.Color = #history > 0 and trainerAccent or THEME.border
-				historyStroke.Transparency = #history > 0 and 0.35 or 0.45
-			end
-			tracerSliders.trainingHistory.badge.Text = string.format("%d RUNS", #history)
-			tracerSliders.trainingHistory.badge.BackgroundColor3 = #history > 0 and trainerAccent:Lerp(Color3.fromRGB(255, 255, 255), 0.18) or Color3.fromRGB(35, 40, 53)
-			tracerSliders.trainingHistory.badge.TextColor3 = #history > 0 and THEME.text or THEME.muted
-			for index, line in ipairs(tracerSliders.trainingHistory.lines) do
-				local entry = history[index]
-				if entry then
-					line.Text = string.format(
-						"%d. %s | H %d M %d | ACC %d%% | C %s | T %s",
-						index,
-						string.upper(entry.drill or "RUN"),
-						entry.hits or 0,
-						entry.misses or 0,
-						entry.accuracy or 0,
-						entry.clickBest and (tostring(entry.clickBest) .. "ms") or "--",
-						entry.trackBest and (tostring(entry.trackBest) .. "ms") or "--"
-					)
-				else
-					line.Text = "--"
-				end
-			end
-		end
-	end
-
-end
-
-local function collectTrackedPlayers(localRoot)
-	local trackedPlayers = {}
-	local trackedData = {}
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LOCAL_PLAYER then
-			local character = player.Character
-			local root = character and getCharacterRoot(character)
-			if character and root and localRoot and shouldTrackPlayer(player) then
-				trackedEnemyCount = trackedEnemyCount + 1
-				local distance = (root.Position - localRoot.Position).Magnitude
-				if distance <= CONFIG.maxDistance then
-					local visible = isPlayerVisible(character, root)
-					local heldTool = getHeldToolName(character)
-					table.insert(trackedPlayers, player)
-					trackedData[player] = {
-						character = character,
-						root = root,
-						distance = distance,
-						visible = visible,
-						heldTool = heldTool,
-						groupDanger = 0,
-					}
-				end
-			end
-		end
-	end
-
-	return trackedPlayers, trackedData
-end
-
-local function populateThreatTelemetry(trackedPlayers, trackedData, localRoot, groupRadius)
-	for index, player in ipairs(trackedPlayers) do
-		local playerData = trackedData[player]
-		if playerData then
-			for otherIndex = index + 1, #trackedPlayers do
-				local otherPlayer = trackedPlayers[otherIndex]
-				local otherData = trackedData[otherPlayer]
-				if otherData and (otherData.root.Position - playerData.root.Position).Magnitude <= groupRadius then
-					playerData.groupDanger = playerData.groupDanger + 1
-					otherData.groupDanger = otherData.groupDanger + 1
-				end
-			end
-
-			playerData.telemetry = getTargetThreatData(
-				player,
-				playerData.character,
-				playerData.root,
-				localRoot,
-				playerData.visible,
-				playerData.groupDanger,
-				playerData.heldTool
-			)
-		end
+do
+	local statusFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\status_runtime.lua", STATUS_RUNTIME_MODULE_SOURCE)
+	if type(statusFactory) == "function" then
+		statusRuntime = statusFactory({
+			CONFIG = CONFIG,
+			THEME = THEME,
+			LOCAL_PLAYER = LOCAL_PLAYER,
+			gui = gui,
+			uiReady = function()
+				return uiReady
+			end,
+			espRuntimeState = espRuntimeState,
+			miniHudLabels = miniHudLabels,
+			tracerSliders = tracerSliders,
+			getCurrentFps = function()
+				return currentFps
+			end,
+			truncateText = truncateText,
+			getCharacterRoot = getCharacterRoot,
+			getHeldToolName = getHeldToolName,
+			getActiveTrainerPresetName = getActiveTrainerPresetName,
+			getTrainerPresetColor = getTrainerPresetColor,
+		})
 	end
 end
 
-local function getThreatScore(playerData)
-	local telemetry = playerData.telemetry
-	local distance = playerData.distance
-	local visible = playerData.visible
-	local mode = CONFIG.threatMode
-
-	if visible then
-		visibleEnemyCount = visibleEnemyCount + 1
-	end
-
-	if mode == "Closest" then
-		return -distance
-	end
-
-	if mode == "Visible" then
-		return (visible and 100000 or 0) - distance
-	end
-
-	if mode == "Armed" then
-		return (playerData.heldTool and 100000 or 0) + (visible and 10000 or 0) - distance
-	end
-
-	if mode == "Smart" then
-		local humanoid = playerData.character:FindFirstChildOfClass("Humanoid")
-		local healthFactor = humanoid and humanoid.MaxHealth > 0 and (1 - math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)) or 0
-		return (visible and 120000 or 0) + (telemetry.weapon and 60000 or 0) + (healthFactor * 20000) + ((telemetry.aimingAtYou and 1 or 0) * 35000) + (telemetry.groupDanger * 4000) - distance
-	end
-
-	return -math.huge
+if statusRuntime then
+	updatePerfStatsUi = statusRuntime.updatePerfStatsUi
 end
 
-local function resolveFocusedTarget(trackedPlayers, trackedData)
-	local focusedScore = -math.huge
-	local lockedFocusValid = false
-
-	for _, player in ipairs(trackedPlayers) do
-		local playerData = trackedData[player]
-		if playerData then
-			local threatScore = getThreatScore(playerData)
-			if threatScore > focusedScore then
-				focusedScore = threatScore
-				focusedPlayer = player
-			end
-
-			if CONFIG.focusLock and player == viewState.lockedFocusTarget then
-				lockedFocusValid = true
-			end
-		end
-	end
-
-	if CONFIG.focusLock then
-		if lockedFocusValid then
-			focusedPlayer = viewState.lockedFocusTarget
-		else
-			viewState.lockedFocusTarget = focusedPlayer
-		end
-	else
-		viewState.lockedFocusTarget = nil
+if type(updatePerfStatsUi) ~= "function" then
+	updatePerfStatsUi = function()
 	end
 end
 
-local function renderTrackedPlayers(trackedData)
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LOCAL_PLAYER then
-			pcall(function()
-				local playerData = trackedData[player]
-				local distance = playerData and playerData.distance or 0
-				if distance > (CONFIG.maxDistance * 0.7) and math.floor(tick() * 4) % 2 == 1 then
-					return
-				end
-				updatePlayerEsp(player, playerData)
-			end)
-		end
+do
+	local trackingFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\tracking_runtime.lua", TRACKING_RUNTIME_MODULE_SOURCE)
+	if type(trackingFactory) == "function" then
+		trackingRuntime = trackingFactory({
+			CONFIG = CONFIG,
+			LOCAL_PLAYER = LOCAL_PLAYER,
+			Players = Players,
+			state = espRuntimeState,
+			viewState = viewState,
+			clearEntry = clearEntry,
+			clearPlayerEsp = clearPlayerEsp,
+			espObjects = espObjects,
+			getCharacterRoot = getCharacterRoot,
+			shouldTrackPlayer = shouldTrackPlayer,
+			getHeldToolName = getHeldToolName,
+			isPlayerVisible = drawingEsp.isPlayerVisible,
+			getTargetThreatData = getTargetThreatData,
+			updatePlayerEsp = updatePlayerEsp,
+			updatePerfStatsUi = updatePerfStatsUi,
+			getCurrentFps = function()
+				return currentFps
+			end,
+		})
 	end
 end
 
-local function refreshAllEsp()
-	local refreshStart = os.clock()
-	visibleEnemyCount = 0
-	trackedEnemyCount = 0
-	focusedPlayer = nil
-	local localCharacter = LOCAL_PLAYER.Character
-	local localRoot = localCharacter and getCharacterRoot(localCharacter)
-	local groupRadius = 28
-
-	if not localRoot then
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player ~= LOCAL_PLAYER then
-				clearPlayerEsp(player)
-			end
-		end
-		lastRefreshMs = (os.clock() - refreshStart) * 1000
-		updatePerfStatsUi()
-		return
+refreshAllEsp = function()
+	if trackingRuntime and trackingRuntime.refreshAllEsp then
+		return trackingRuntime.refreshAllEsp()
 	end
-
-	local trackedPlayers, trackedData = collectTrackedPlayers(localRoot)
-	populateThreatTelemetry(trackedPlayers, trackedData, localRoot, groupRadius)
-	resolveFocusedTarget(trackedPlayers, trackedData)
-	renderTrackedPlayers(trackedData)
-
-	lastRefreshMs = (os.clock() - refreshStart) * 1000
-	if currentFps > 0 then
-		if currentFps < 35 then
-			updateInterval = 1 / 16
-		elseif trackedEnemyCount > 12 then
-			updateInterval = 1 / 24
-		else
-			updateInterval = 1 / 30
-		end
-	end
-	updatePerfStatsUi()
-
 end
 
-local function clearAllEsp()
-	for player, entry in pairs(espObjects) do
-		clearEntry(entry)
-		espObjects[player] = nil
+clearAllEsp = function()
+	if trackingRuntime and trackingRuntime.clearAllEsp then
+		return trackingRuntime.clearAllEsp()
 	end
 end
 
@@ -9314,7 +4184,7 @@ local function hookCharacter(player)
 	end
 end
 
-local function bindToggle(button, configKey)
+bindToggle = function(button, configKey)
 	button.MouseButton1Click:Connect(function()
 		applyConfigToggleState(configKey, not CONFIG[configKey])
 	end)
@@ -9413,7 +4283,7 @@ applyConfigToggleState = function(configKey, nextState, suppressToast)
 	end
 end
 
-local function setEspEnabled(state)
+setEspEnabled = function(state)
 	CONFIG.enabled = state
 	setToggleState(miniHudLabels.utility.controls.enabledToggle, state)
 	if state then
@@ -9460,17 +4330,22 @@ miniHudLabels.utility.applyMinimalMode = function(state, skipSave)
 end
 
 miniHudLabels.utility.setMinimized = function(state)
+	local topLeft = window.AbsolutePosition
+	local nextSize
+
 	uiMinimized = state
 	content.Visible = not state
 	if CONFIG.minimalMode then
-		window.Size = state and minimalMinimizedWindowSize or minimalWindowSize
+		nextSize = state and minimalMinimizedWindowSize or minimalWindowSize
 	else
-		window.Size = state and minimizedWindowSize or expandedWindowSize
+		nextSize = state and minimizedWindowSize or expandedWindowSize
 	end
+	window.Size = nextSize
+	setWindowTopLeft(topLeft, nextSize)
 	chrome.minimizeButton.Text = state and "+" or "-"
 end
 
-function resetOverlayPositions()
+resetOverlayPositions = function()
 	if overlayTools and overlayTools.resetOverlayPosition then
 		overlayTools.resetOverlayPosition(miniHud, "miniHud")
 		overlayTools.resetOverlayPosition(tracerSliders.targetCard, "targetCard")
@@ -10490,6 +5365,9 @@ syncUiFromConfig = function()
 		overlayTools.updateReleasePanel(miniHudLabels.utility.updatePanel)
 	end
 	updateViewUi()
+	if keybindController then
+		keybindController.update()
+	end
 end
 
 miniHudLabels.utility.controls.presetDropdown.arrow.MouseButton1Click:Connect(function()
@@ -11280,642 +6158,92 @@ local function saveNamedConfigFromInput()
 end
 
 miniHudLabels.utility.saveNamedConfig.MouseButton1Click:Connect(saveNamedConfigFromInput)
-miniHudLabels.utility.configNameInput.FocusLost:Connect(function(enterPressed)
-	if enterPressed then
-		saveNamedConfigFromInput()
-	end
-end)
-
-miniHudLabels.utility.resetPositions.MouseButton1Click:Connect(function()
-	resetOverlayPositions()
-	showToast("Settings", "Overlay positions reset", THEME.accent)
-end)
-
-miniHudLabels.utility.resetDisplay.MouseButton1Click:Connect(function()
-	resetDisplaySettings()
-	syncUiFromConfig()
-	refreshAllEsp()
-	saveSettings()
-	showToast("Settings", "Display settings reset", THEME.accent)
-end)
-
-miniHudLabels.utility.resetView.MouseButton1Click:Connect(function()
-	resetViewSettings()
-	syncUiFromConfig()
-	applyCameraFov()
-	applyZoomLimitSetting()
-	updateViewUi()
-	saveSettings()
-	showToast("Settings", "View settings reset", THEME.accent)
-end)
-
-miniHudLabels.utility.resetPerformance.MouseButton1Click:Connect(function()
-	resetPerformanceSettings()
-	applyPerformanceSettings()
-	syncUiFromConfig()
-	saveSettings()
-	showToast("Settings", "Performance settings reset", THEME.accent)
-end)
-
-miniHudLabels.utility.respawn.MouseButton1Click:Connect(function()
-	local success = pcall(function()
-		LOCAL_PLAYER:LoadCharacter()
-	end)
-
-	if not success then
-		local character = LOCAL_PLAYER.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			pcall(function()
-				humanoid.Health = 0
-			end)
-			pcall(function()
-				humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-			end)
-		elseif character then
-			pcall(function()
-				character:BreakJoints()
-			end)
-		end
-	end
-
-	showToast("Player Utility", "Respawn requested", THEME.accent)
-end)
-
-miniHudLabels.utility.tools.MouseButton1Click:Connect(function()
-	pcall(function()
-		local humanoid = getLocalHumanoid()
-		if humanoid then
-			humanoid:UnequipTools()
-		end
-	end)
-	showToast("Player Utility", "Tools reset", THEME.accent)
-end)
-
-chrome.minimizeButton.MouseButton1Click:Connect(function()
-	miniHudLabels.utility.setMinimized(not uiMinimized)
-end)
-
-window:GetPropertyChangedSignal("Position"):Connect(function()
-	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
-		return
-	end
-
-	local position = window.Position
-	if CONFIG.windowOffsetX ~= position.X.Offset or CONFIG.windowOffsetY ~= position.Y.Offset then
-		CONFIG.windowOffsetX = position.X.Offset
-		CONFIG.windowOffsetY = position.Y.Offset
-		saveSettings()
-	end
-end)
-
-Players.PlayerAdded:Connect(function(player)
-	hookCharacter(player)
-	refreshAllEsp()
-end)
-
-Players.PlayerRemoving:Connect(function(player)
-	clearPlayerEsp(player)
-	espObjects[player] = nil
-	miniHudLabels.utility.targetTelemetry[player] = nil
-	if player == viewState.spectateTarget then
-		setSpectateTarget(nil)
-	end
-	if player == viewState.lockedFocusTarget then
-		viewState.lockedFocusTarget = nil
-	end
-	miniHudLabels.utility.killCredit[player] = nil
-end)
-
-for _, player in ipairs(Players:GetPlayers()) do
-	if player ~= LOCAL_PLAYER then
-		hookCharacter(player)
-	end
-end
-
 do
-	local function updateFovCircleFromX(positionX)
-		local bar = tracerSliders.fovCircleSlider.bar
-		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
-		local alpha = 0
-		if bar.AbsoluteSize.X > 0 then
-			alpha = relative / bar.AbsoluteSize.X
+	local hooksFactory = requireLocalModule("C:\\Users\\alexl\\Desktop\\ESP\\esp_modules\\runtime_hooks.lua", RUNTIME_HOOKS_MODULE_SOURCE)
+	if type(hooksFactory) == "function" then
+		local hooksModule = hooksFactory({
+			CONFIG = CONFIG,
+			THEME = THEME,
+			SHARED_ENV = SHARED_ENV,
+			gui = gui,
+			window = window,
+			watermark = watermark,
+			miniHud = miniHud,
+			miniHudLabels = miniHudLabels,
+			chrome = chrome,
+			Players = Players,
+			LOCAL_PLAYER = LOCAL_PLAYER,
+			UserInputService = UserInputService,
+			RunService = RunService,
+			tracerSliders = tracerSliders,
+			viewButtons = viewButtons,
+			playerButtons = playerButtons,
+			viewState = viewState,
+			espRuntimeState = espRuntimeState,
+			espObjects = espObjects,
+			saveNamedConfigFromInput = saveNamedConfigFromInput,
+			resetOverlayPositions = resetOverlayPositions,
+			resetDisplaySettings = resetDisplaySettings,
+			resetViewSettings = resetViewSettings,
+			resetPerformanceSettings = resetPerformanceSettings,
+			syncUiFromConfig = syncUiFromConfig,
+			refreshAllEsp = refreshAllEsp,
+			saveSettings = saveSettings,
+			showToast = showToast,
+			applyCameraFov = applyCameraFov,
+			applyZoomLimitSetting = applyZoomLimitSetting,
+			updateViewUi = updateViewUi,
+			applyPerformanceSettings = applyPerformanceSettings,
+			getLocalHumanoid = getLocalHumanoid,
+			hookCharacter = hookCharacter,
+			clearPlayerEsp = clearPlayerEsp,
+			setSpectateTarget = setSpectateTarget,
+			bindSliderDragStart = bindSliderDragStart,
+			bindSliderValueInput = bindSliderValueInput,
+			setSliderState = setSliderState,
+			updateCrosshair = updateCrosshair,
+			updateTrainerVisuals = updateTrainerVisuals,
+			applyPlayerMovementState = applyPlayerMovementState,
+			ensureTrainerState = ensureTrainerState,
+			getMouseScreenPosition = getMouseScreenPosition,
+			getCamera = getCamera,
+			recordTrainerClickSuccess = recordTrainerClickSuccess,
+			spawnTrainerTarget = spawnTrainerTarget,
+			recordTrainerClickMiss = recordTrainerClickMiss,
+			getLocalRoot = getLocalRoot,
+			setEspEnabled = setEspEnabled,
+			hideCrosshair = hideCrosshair,
+			updateMouseIconVisibility = updateMouseIconVisibility,
+			getKeybindController = function()
+				return keybindController
+			end,
+			toggleFreeCam = toggleFreeCam,
+			setLocalMovementSuppressed = setLocalMovementSuppressed,
+			getCurrentFps = function()
+				return currentFps
+			end,
+			setCurrentFps = function(value)
+				currentFps = value
+			end,
+			FLY_ACCELERATION = FLY_ACCELERATION,
+			FLY_DECELERATION = FLY_DECELERATION,
+			FLY_PRECISION_MULTIPLIER = FLY_PRECISION_MULTIPLIER,
+			FLY_BOOST_MULTIPLIER = FLY_BOOST_MULTIPLIER,
+			toggleMinimized = function()
+				miniHudLabels.utility.setMinimized(not uiMinimized)
+			end,
+			isUiReady = function()
+				return uiReady
+			end,
+			updatePerfStatsUi = updatePerfStatsUi,
+		})
+		if type(hooksModule) == "table" and type(hooksModule.setup) == "function" then
+			hooksModule.setup()
 		end
-
-		local value = math.floor(tracerSliders.fovCircleSlider.min + ((tracerSliders.fovCircleSlider.max - tracerSliders.fovCircleSlider.min) * alpha) + 0.5)
-		value = math.clamp(value, tracerSliders.fovCircleSlider.min, tracerSliders.fovCircleSlider.max)
-
-		if CONFIG.fovRadius ~= value then
-			CONFIG.fovRadius = value
-			updateCrosshair()
-			saveSettings()
-		end
-
-		setSliderState(tracerSliders.fovCircleSlider, CONFIG.fovRadius)
-	end
-
-	bindSliderDragStart(tracerSliders.fovCircleSlider.bar, updateFovCircleFromX)
-
-	bindSliderValueInput(tracerSliders.fovCircleSlider, function(typedValue)
-		if typedValue == nil then
-			return CONFIG.fovRadius
-		end
-
-		return math.clamp(math.floor(typedValue + 0.5), tracerSliders.fovCircleSlider.min, tracerSliders.fovCircleSlider.max)
-	end, function(nextValue)
-		if CONFIG.fovRadius ~= nextValue then
-			CONFIG.fovRadius = nextValue
-			updateCrosshair()
-			saveSettings()
-		end
-	end)
-end
-
-do
-	local function updateCameraFovFromX(positionX)
-		local bar = miniHudLabels.utility.controls.cameraFovSlider.bar
-		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
-		local alpha = 0
-		if bar.AbsoluteSize.X > 0 then
-			alpha = relative / bar.AbsoluteSize.X
-		end
-
-		local value = math.floor(miniHudLabels.utility.controls.cameraFovSlider.min + ((miniHudLabels.utility.controls.cameraFovSlider.max - miniHudLabels.utility.controls.cameraFovSlider.min) * alpha) + 0.5)
-		value = math.clamp(value, miniHudLabels.utility.controls.cameraFovSlider.min, miniHudLabels.utility.controls.cameraFovSlider.max)
-
-		if CONFIG.cameraFov ~= value then
-			CONFIG.cameraFov = value
-			applyCameraFov()
-			saveSettings()
-		end
-
-		setSliderState(miniHudLabels.utility.controls.cameraFovSlider, CONFIG.cameraFov)
-	end
-
-	bindSliderDragStart(miniHudLabels.utility.controls.cameraFovSlider.bar, updateCameraFovFromX)
-
-	bindSliderValueInput(miniHudLabels.utility.controls.cameraFovSlider, function(typedValue)
-		if typedValue == nil then
-			return CONFIG.cameraFov
-		end
-
-		return math.clamp(math.floor(typedValue + 0.5), miniHudLabels.utility.controls.cameraFovSlider.min, miniHudLabels.utility.controls.cameraFovSlider.max)
-	end, function(nextValue)
-		if CONFIG.cameraFov ~= nextValue then
-			CONFIG.cameraFov = nextValue
-			applyCameraFov()
-			saveSettings()
-		end
-	end)
-end
-
-do
-	local draggingCombatSlider = nil
-
-	local function updateTracerSlider(entry, positionX)
-		local slider = entry.slider
-		local bar = slider.bar
-		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
-		local alpha = 0
-		if bar.AbsoluteSize.X > 0 then
-			alpha = relative / bar.AbsoluteSize.X
-		end
-
-		local value = math.floor(slider.min + ((slider.max - slider.min) * alpha) + 0.5)
-		value = math.clamp(value, slider.min, slider.max)
-
-		if CONFIG[entry.key] ~= value then
-			CONFIG[entry.key] = value
-			saveSettings()
-			if entry.refreshEsp then
-				refreshAllEsp()
-			end
-			if entry.refreshCrosshair then
-				updateCrosshair()
-			end
-		end
-
-		setSliderState(slider, CONFIG[entry.key])
-	end
-
-	for _, entry in ipairs({
-		{ slider = tracerSliders.thickness, key = "tracerThickness", refreshEsp = true },
-		{ slider = tracerSliders.transparency, key = "tracerTransparency", refreshEsp = true },
-		{ slider = tracerSliders.maxDistance, key = "maxDistance", refreshEsp = true },
-		{ slider = tracerSliders.fovThickness, key = "fovCircleThickness", refreshCrosshair = true },
-		{ slider = tracerSliders.fovTransparency, key = "fovCircleTransparency", refreshCrosshair = true },
-		{ slider = tracerSliders.crosshairThickness, key = "crosshairThickness", refreshCrosshair = true },
-		{ slider = tracerSliders.crosshairGap, key = "crosshairGap", refreshCrosshair = true },
-	}) do
-		bindSliderDragStart(entry.slider.bar, function(positionX)
-			draggingCombatSlider = entry
-			updateTracerSlider(draggingCombatSlider, positionX)
-		end, function()
-			draggingCombatSlider = nil
-		end)
-	end
-
-	for _, entry in ipairs({
-		{ slider = tracerSliders.thickness, key = "tracerThickness", onChange = refreshAllEsp },
-		{ slider = tracerSliders.transparency, key = "tracerTransparency", onChange = refreshAllEsp },
-		{ slider = tracerSliders.maxDistance, key = "maxDistance", onChange = refreshAllEsp },
-		{ slider = tracerSliders.fovThickness, key = "fovCircleThickness", onChange = updateCrosshair },
-		{ slider = tracerSliders.fovTransparency, key = "fovCircleTransparency", onChange = updateCrosshair },
-		{ slider = tracerSliders.crosshairThickness, key = "crosshairThickness", onChange = updateCrosshair },
-		{ slider = tracerSliders.crosshairGap, key = "crosshairGap", onChange = updateCrosshair },
-	}) do
-		bindSliderValueInput(entry.slider, function(typedValue)
-			if typedValue == nil then
-				return CONFIG[entry.key]
-			end
-
-			return math.clamp(math.floor(typedValue + 0.5), entry.slider.min, entry.slider.max)
-		end, function(nextValue)
-			if CONFIG[entry.key] ~= nextValue then
-				CONFIG[entry.key] = nextValue
-				saveSettings()
-				entry.onChange()
-			end
-		end)
-	end
-end
-
-do
-	local function updateFreeCamSpeedFromX(positionX)
-		local bar = viewButtons.speed.bar
-		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
-		local alpha = 0
-		if bar.AbsoluteSize.X > 0 then
-			alpha = relative / bar.AbsoluteSize.X
-		end
-
-		local value = math.floor(viewButtons.speed.min + ((viewButtons.speed.max - viewButtons.speed.min) * alpha) + 0.5)
-		value = math.clamp(value, viewButtons.speed.min, viewButtons.speed.max)
-
-		if CONFIG.freeCamSpeed ~= value then
-			CONFIG.freeCamSpeed = value
-			saveSettings()
-		end
-
-		setSliderState(viewButtons.speed, CONFIG.freeCamSpeed)
-	end
-
-	bindSliderDragStart(viewButtons.speed.bar, updateFreeCamSpeedFromX)
-
-	bindSliderValueInput(viewButtons.speed, function(typedValue)
-		if typedValue == nil then
-			return CONFIG.freeCamSpeed
-		end
-
-		return math.clamp(math.floor(typedValue + 0.5), viewButtons.speed.min, viewButtons.speed.max)
-	end, function(nextValue)
-		if CONFIG.freeCamSpeed ~= nextValue then
-			CONFIG.freeCamSpeed = nextValue
-			saveSettings()
-		end
-	end)
-end
-
-do
-	local draggingPlayerSlider = nil
-
-	local function updatePlayerSlider(entry, positionX)
-		local slider = entry.slider
-		local bar = slider.bar
-		local relative = math.clamp(positionX - bar.AbsolutePosition.X, 0, bar.AbsoluteSize.X)
-		local alpha = 0
-		if bar.AbsoluteSize.X > 0 then
-			alpha = relative / bar.AbsoluteSize.X
-		end
-
-		local value = math.floor(slider.min + ((slider.max - slider.min) * alpha) + 0.5)
-		value = math.clamp(value, slider.min, slider.max)
-
-		if CONFIG[entry.key] ~= value then
-			CONFIG[entry.key] = value
-			saveSettings()
-			applyPlayerMovementState()
-			updateViewUi()
-		end
-
-		setSliderState(slider, CONFIG[entry.key])
-	end
-
-	for _, entry in ipairs({
-		{ slider = playerButtons.walkSpeed, key = "walkSpeed" },
-		{ slider = playerButtons.flySpeed, key = "flySpeed" },
-	}) do
-		bindSliderDragStart(entry.slider.bar, function(positionX)
-			draggingPlayerSlider = entry
-			updatePlayerSlider(draggingPlayerSlider, positionX)
-		end, function()
-			draggingPlayerSlider = nil
-		end)
-
-		bindSliderValueInput(entry.slider, function(typedValue)
-			if typedValue == nil then
-				return CONFIG[entry.key]
-			end
-
-			return math.clamp(math.floor(typedValue + 0.5), entry.slider.min, entry.slider.max)
-		end, function(nextValue)
-			if CONFIG[entry.key] ~= nextValue then
-				CONFIG[entry.key] = nextValue
-				saveSettings()
-				applyPlayerMovementState()
-				updateViewUi()
-			end
-		end)
-	end
-end
-
-UserInputService.JumpRequest:Connect(function()
-	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
-		return
-	end
-
-	if not CONFIG.infiniteJump or viewState.freeCamEnabled then
-		return
-	end
-
-	local humanoid = getLocalHumanoid()
-	if not humanoid or humanoid.Health <= 0 then
-		return
-	end
-
-	local state = humanoid:GetState()
-	if state == Enum.HumanoidStateType.Dead or state == Enum.HumanoidStateType.Seated then
-		return
-	end
-
-	humanoid.Jump = true
-	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-end)
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
-		return
-	end
-
-	if gameProcessed then
-		return
-	end
-
-	local inputIsMouseButton = input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.MouseButton2
-		or input.UserInputType == Enum.UserInputType.MouseButton3
-	local allowMouseKeybindInput = not window.Visible
-
-	if keybindController and (not inputIsMouseButton or allowMouseKeybindInput) and keybindController.handleInput(input) then
-		return
-	end
-
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local trainer = ensureTrainerState()
-		if trainer then
-			trainer.spreadValue = math.min(36, trainer.spreadValue + 7)
-			trainer.recoilKick = math.min(18, trainer.recoilKick + 6)
-			trainer.recoilOffset = trainer.recoilOffset + Vector2.new(math.random(-4, 4), -math.random(4, 10))
-		end
-	end
-
-	if CONFIG.clickTeleport and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-		local root = getLocalRoot()
-		local mouse = LOCAL_PLAYER and LOCAL_PLAYER:GetMouse()
-		if root and mouse and mouse.Hit then
-			root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
-			showToast("Player", "Teleported", THEME.accent)
-			return
-		end
-	end
-
-	if CONFIG.aimTrainerMode and CONFIG.trainerDrillType == "Click" and input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local trainer = ensureTrainerState()
-		local clickPosition = getMouseScreenPosition(getCamera())
-		if trainer and trainer.targetPosition and clickPosition then
-			if (clickPosition - trainer.targetPosition).Magnitude <= CONFIG.trainerHitWindow then
-				if trainer.targetSpawnAt and trainer.targetSpawnAt > 0 then
-					recordTrainerClickSuccess(math.floor((tick() - trainer.targetSpawnAt) * 1000 + 0.5))
-				end
-				spawnTrainerTarget()
-			else
-				recordTrainerClickMiss()
-			end
-		end
-	end
-
-	if viewState.freeCamEnabled or CONFIG.fly then
-		if input.UserInputType == Enum.UserInputType.MouseButton2 then
-			if viewState.freeCamEnabled then
-				viewState.lookHeld = true
-				UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-			end
-		elseif input.KeyCode == Enum.KeyCode.W then
-			viewState.moveForward = 1
-		elseif input.KeyCode == Enum.KeyCode.S then
-			viewState.moveForward = -1
-		elseif input.KeyCode == Enum.KeyCode.D then
-			viewState.moveRight = 1
-		elseif input.KeyCode == Enum.KeyCode.A then
-			viewState.moveRight = -1
-		elseif input.KeyCode == Enum.KeyCode.Space then
-			viewState.moveUp = 1
-		elseif input.KeyCode == Enum.KeyCode.LeftControl then
-			viewState.moveUp = -1
-		elseif input.KeyCode == Enum.KeyCode.Escape and viewState.freeCamEnabled then
-			toggleFreeCam()
-			return
-		end
-	end
-
-	if input.KeyCode == CONFIG.quickHideKey then
-		window.Visible = not window.Visible
-		watermark.Visible = uiReady and window.Visible and not CONFIG.minimalMode
-		miniHud.Visible = uiReady and window.Visible and CONFIG.showMiniHud
-		showToast("Menu", window.Visible and "Menu shown" or "Menu hidden", window.Visible and THEME.accent or THEME.muted)
-	elseif input.KeyCode == CONFIG.uiToggleKey then
-		gui.Enabled = not gui.Enabled
-		if not gui.Enabled then
-			hideCrosshair()
-		end
-		if keybindController then
-			keybindController.update()
-		end
-		updateMouseIconVisibility()
-	elseif input.KeyCode == CONFIG.espToggleKey then
-		setEspEnabled(not CONFIG.enabled)
-	elseif input.KeyCode == CONFIG.panicKey then
-		setEspEnabled(false)
-		gui.Enabled = false
-		hideCrosshair()
-		if keybindController then
-			keybindController.update()
-		end
-		updateMouseIconVisibility()
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
-		return
-	end
-
-	local inputIsMouseButton = input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.MouseButton2
-		or input.UserInputType == Enum.UserInputType.MouseButton3
-	local allowMouseKeybindInput = not window.Visible
-
-	if keybindController and keybindController.handleInputEnded and (not inputIsMouseButton or allowMouseKeybindInput) then
-		keybindController.handleInputEnded(input)
-	end
-
-	if input.UserInputType == Enum.UserInputType.MouseButton2 then
-		viewState.lookHeld = false
-		if viewState.freeCamEnabled then
-			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-		end
-	elseif input.KeyCode == Enum.KeyCode.W or input.KeyCode == Enum.KeyCode.S then
-		viewState.moveForward = 0
-	elseif input.KeyCode == Enum.KeyCode.D or input.KeyCode == Enum.KeyCode.A then
-		viewState.moveRight = 0
-	elseif input.KeyCode == Enum.KeyCode.Space or input.KeyCode == Enum.KeyCode.LeftControl then
-		viewState.moveUp = 0
-	end
-end)
-
-local updateAccumulator = 0
-local frameTaskErrorCounts = {}
-
-local function runSafeFrameTask(taskName, taskFn, ...)
-	local ok, err = pcall(taskFn, ...)
-	if ok then
-		return true
-	end
-
-	local count = (frameTaskErrorCounts[taskName] or 0) + 1
-	frameTaskErrorCounts[taskName] = count
-	if count <= 3 then
-		warn(string.format("[0xVyrs] %s failed: %s", taskName, tostring(err)))
-	end
-	return false
-end
-
-RunService.RenderStepped:Connect(function(deltaTime)
-	if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
-		return
-	end
-
-	if deltaTime > 0 then
-		currentFps = (currentFps == 0) and (1 / deltaTime) or (currentFps * 0.85 + (1 / deltaTime) * 0.15)
-	end
-
-	local camera = getCamera()
-	if viewState.freeCamEnabled and camera then
-		setLocalMovementSuppressed(true)
-		if viewState.lookHeld then
-			local mouseDelta = UserInputService:GetMouseDelta()
-			viewState.freeCamYaw = viewState.freeCamYaw - (mouseDelta.X * 0.0025)
-			viewState.freeCamPitch = math.clamp(viewState.freeCamPitch - (mouseDelta.Y * 0.0025), -1.45, 1.45)
-		end
-
-		local rotation = CFrame.Angles(0, viewState.freeCamYaw, 0) * CFrame.Angles(viewState.freeCamPitch, 0, 0)
-		local movement = Vector3.new(viewState.moveRight, viewState.moveUp, -viewState.moveForward)
-		if movement.Magnitude > 1 then
-			movement = movement.Unit
-		end
-
-		local speed = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and (CONFIG.freeCamSpeed * 1.67) or CONFIG.freeCamSpeed
-		local position = viewState.freeCamCFrame and viewState.freeCamCFrame.Position or camera.CFrame.Position
-		position = position + rotation:VectorToWorldSpace(movement) * speed * deltaTime
-		viewState.freeCamCFrame = CFrame.new(position) * rotation
-		camera.CameraType = Enum.CameraType.Scriptable
-		camera.CFrame = viewState.freeCamCFrame
-	elseif CONFIG.fly and camera then
-		local root = getLocalRoot()
-		local humanoid = getLocalHumanoid()
-		if root and humanoid then
-			local forward = camera.CFrame.LookVector
-			if forward.Magnitude < 0.001 then
-				forward = root.CFrame.LookVector
-			end
-			forward = forward.Unit
-
-			local right = camera.CFrame.RightVector
-			if right.Magnitude < 0.001 then
-				right = root.CFrame.RightVector
-			end
-			right = right.Unit
-
-			local inputVelocity = (right * viewState.moveRight) + (Vector3.yAxis * viewState.moveUp) + (forward * viewState.moveForward)
-			if inputVelocity.Magnitude > 1 then
-				inputVelocity = inputVelocity.Unit
-			end
-
-			local speedMultiplier = 1
-			if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-				speedMultiplier = FLY_BOOST_MULTIPLIER
-			elseif UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) then
-				speedMultiplier = FLY_PRECISION_MULTIPLIER
-			end
-
-			local targetVelocity = inputVelocity * (CONFIG.flySpeed * speedMultiplier)
-			local currentVelocity = viewState.flyVelocity or root.AssemblyLinearVelocity
-			local blendSpeed = targetVelocity.Magnitude > currentVelocity.Magnitude and FLY_ACCELERATION or FLY_DECELERATION
-			local alpha = math.clamp(deltaTime * blendSpeed, 0, 1)
-			local blendedVelocity = currentVelocity:Lerp(targetVelocity, alpha)
-			if targetVelocity.Magnitude < 0.01 and blendedVelocity.Magnitude < 1 then
-				blendedVelocity = Vector3.zero
-			end
-
-			viewState.flyVelocity = blendedVelocity
-			root.AssemblyLinearVelocity = blendedVelocity
-			root.AssemblyAngularVelocity = Vector3.zero
-			humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-			humanoid.PlatformStand = false
-			humanoid.AutoRotate = false
-
-			local visualDirection = blendedVelocity
-			if visualDirection.Magnitude > 0.05 then
-				viewState.flyLookVector = visualDirection.Unit
-			else
-				viewState.flyLookVector = forward
-			end
-
-			if viewState.flyLookVector and viewState.flyLookVector.Magnitude > 0.05 then
-				local targetCFrame = CFrame.lookAt(root.Position, root.Position + viewState.flyLookVector, Vector3.yAxis)
-				root.CFrame = root.CFrame:Lerp(targetCFrame, math.clamp(deltaTime * 14, 0, 1))
-			end
-		end
-	elseif viewState.spectateTarget then
-		local targetCharacter = viewState.spectateTarget.Character
-		local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
-		if targetHumanoid then
-			if camera and (camera.CameraType ~= Enum.CameraType.Custom or camera.CameraSubject ~= targetHumanoid) then
-				camera.CameraType = Enum.CameraType.Custom
-				camera.CameraSubject = targetHumanoid
-			end
-		else
-			setSpectateTarget(nil)
-		end
-	end
-
-	if not CONFIG.fly and not viewState.freeCamEnabled then
-		applyPlayerMovementState()
-	end
-
-	if gui.Enabled then
-		runSafeFrameTask("updateCrosshair", updateCrosshair)
 	else
-		hideCrosshair()
+		warn("[0xVyrs] Failed to load runtime hooks module")
 	end
-	runSafeFrameTask("updateTrainerVisuals", updateTrainerVisuals, deltaTime)
-	runSafeFrameTask("updateMouseIconVisibility", updateMouseIconVisibility)
-	runSafeFrameTask("updatePerfStatsUi", updatePerfStatsUi)
-	updateAccumulator = updateAccumulator + deltaTime
-	if updateAccumulator >= updateInterval then
-		updateAccumulator = 0
-		runSafeFrameTask("refreshAllEsp", refreshAllEsp)
-	end
-end)
+end
 
 task.spawn(miniHudLabels.utility.playIntroAnimation)
+

@@ -8,7 +8,6 @@
 
 return function(context)
 	local featureDefs = {
-		{ id = "freeCam", label = "Free Cam" },
 		{ id = "focusLock", label = "Focus Lock" },
 		{ id = "showTargetCard", label = "Target Card" },
 		{ id = "showMiniHud", label = "Mini HUD" },
@@ -408,7 +407,7 @@ return function(context)
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			Position = UDim2.new(0, 0, 0, 0),
-			Size = UDim2.new(1, 0, 0, 24),
+			Size = UDim2.new(1, 0, 0, 42),
 			Text = "",
 			ZIndex = 14,
 			Parent = menu,

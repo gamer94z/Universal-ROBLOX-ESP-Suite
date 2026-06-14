@@ -1,5 +1,12 @@
 esp_settings.json
+esp_config_slots.json
 .DS_Store
 Thumbs.db
+Desktop.ini
 .vscode/
 .idea/
+*.code-workspace
+*.tmp
+*.bak
+*.orig
+*.log

@@ -1,0 +1,16 @@
+name: Repo Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  repository-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run repository checks
+        shell: pwsh
+        run: ./bin/check-repo.ps1
