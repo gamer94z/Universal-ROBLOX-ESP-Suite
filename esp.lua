@@ -99,6 +99,8 @@ local CONFIG = {
 	panelTitle = "0xVyrs",
 	panelSubtitle = " Panel",
 	version = "1.5",
+	telemetryUrl = "https://YOUR-RAILWAY-APP.up.railway.app/api/ping",
+	telemetryHeartbeatSeconds = 60,
 	windowOffsetX = 0,
 	windowOffsetY = 0,
 	miniHudOffsetX = -1,
@@ -1459,6 +1461,74 @@ CONFIG.showSkeleton = false
 CONFIG.boxMode = normalizeBoxMode(CONFIG.boxMode)
 CONFIG.aimTrainerMode = false
 CONFIG.trainerChallengeMode = false
+
+do
+local function getTelemetryRequest()
+	return (syn and syn.request)
+		or (http and http.request)
+		or http_request
+		or request
+end
+
+local function isTelemetryUrlConfigured()
+	return type(CONFIG.telemetryUrl) == "string"
+		and CONFIG.telemetryUrl:match("^https://")
+		and not CONFIG.telemetryUrl:find("YOUR%-RAILWAY%-APP", 1, true)
+end
+
+local function sendTelemetryPing(eventName, sessionId, startedAt)
+	local requestFn = getTelemetryRequest()
+	if not requestFn or not isTelemetryUrlConfigured() then
+		return false
+	end
+
+	local payload = {
+		event = eventName,
+		sessionId = sessionId,
+		version = tostring(CONFIG.version),
+		placeId = tostring(game.PlaceId),
+		jobId = tostring(game.JobId or ""),
+		uptime = math.max(0, math.floor(os.clock() - startedAt)),
+		clientTime = os.time(),
+	}
+
+	local ok = pcall(function()
+		requestFn({
+			Url = CONFIG.telemetryUrl,
+			Method = "POST",
+			Headers = {
+				["Content-Type"] = "application/json",
+				["X-0xVyrs-Version"] = tostring(CONFIG.version),
+			},
+			Body = HttpService:JSONEncode(payload),
+		})
+	end)
+
+	return ok
+end
+
+local function startTelemetry()
+	if not isTelemetryUrlConfigured() then
+		return
+	end
+
+	local sessionId = HttpService:GenerateGUID(false)
+	local startedAt = os.clock()
+
+	task.spawn(function()
+		sendTelemetryPing("launch", sessionId, startedAt)
+		while SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN do
+			task.wait(math.max(15, tonumber(CONFIG.telemetryHeartbeatSeconds) or 60))
+			if SHARED_ENV.__VYRS_ESP_ACTIVE_TOKEN ~= gui:GetAttribute("ActiveToken") then
+				break
+			end
+			sendTelemetryPing("heartbeat", sessionId, startedAt)
+		end
+	end)
+end
+
+startTelemetry()
+end
 
 create("UIGradient", {
 	Color = ColorSequence.new({

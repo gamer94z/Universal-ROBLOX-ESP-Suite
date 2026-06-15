@@ -10,3 +10,4 @@ Desktop.ini
 *.bak
 *.orig
 *.log
+node_modules/

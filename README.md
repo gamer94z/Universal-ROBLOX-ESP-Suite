@@ -23,3 +23,15 @@ Use it only as released. Do not modify, resell, repost, or claim authorship.
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/gamer94z/Universal-ROBLOX-ESP-Suite/main/esp.lua"))()
 ```
+
+## Railway Telemetry
+
+The included Railway service accepts anonymous launch/heartbeat pings at `/api/ping` and shows live stats at `/`.
+
+Telemetry payloads include only a generated session id, script version, Roblox place id, job id, uptime, and event type. No Roblox username or user id is sent.
+
+After Railway creates the public domain, replace `CONFIG.telemetryUrl` in `esp.lua` with:
+
+```lua
+https://your-railway-domain.up.railway.app/api/ping
+```
