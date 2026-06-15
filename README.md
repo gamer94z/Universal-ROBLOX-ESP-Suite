@@ -30,8 +30,14 @@ The included Railway service accepts anonymous launch/heartbeat pings at `/api/p
 
 Telemetry payloads include only a generated session id, script version, Roblox place id, job id, uptime, and event type. No Roblox username or user id is sent.
 
-After Railway creates the public domain, replace `CONFIG.telemetryUrl` in `esp.lua` with:
+Current telemetry endpoint:
 
 ```lua
-https://your-railway-domain.up.railway.app/api/ping
+https://0xesp.up.railway.app/api/ping
+```
+
+To use the exact dashboard background image, set this Railway environment variable to a hosted image URL:
+
+```text
+DASHBOARD_BACKGROUND_URL=https://...
 ```
