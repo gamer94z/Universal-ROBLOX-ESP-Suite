@@ -2,14 +2,20 @@
 
 Proprietary Roblox ESP release maintained by `0xVyrs`.
 
-Version: `v1.5`
+Version: `v2.0`
 
-## v1.5 Changelog
+## v2.0 Changelog
 
-- Free Cam turned off until further notice.
-- Added warning symbols to risky features.
-- Shrunk the UI.
-- Fixed UI alignment issues.
+- Rebuilt the interface as a command-prompt style `.exe` console with clickable controls.
+- Added feature search and a live player inspector with spectate/focus controls.
+- Preserved the full feature set while improving tracking, visibility caching and render scheduling.
+- Added adaptive Quality / Balanced / Performance rendering profiles.
+- Added universal entity/NPC adapters and per-game profiles.
+- Added custom presets, self-test, clean unload/restart and improved keybind/config controls.
+- Fixed feature OFF states so movement, camera and performance changes restore correctly.
+- Added reversible performance changes and reduced unnecessary workspace/player scanning.
+- Added fast parallel preload, full-surface window dragging and fold/unfold animations.
+- External telemetry is disabled.
 
 ## Ownership
 
