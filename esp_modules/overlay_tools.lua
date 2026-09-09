@@ -1,22 +1,42 @@
---[[
-	Copyright (c) 2026 gamer94z / 0xVyrs
-	All Rights Reserved.
-
-	This module is part of proprietary 0xVyrs software. Unauthorized copying,
-	redistribution, modification, resale, reposting, or reuse is not permitted.
-]]
-
 return function(context)
+	local env = (type(getgenv) == "function" and getgenv())
+		or (type(getfenv) == "function" and getfenv(0))
+		or _G
+
+	local previousConnections = env.__VYRS_ESP_OVERLAY_CONNECTIONS
+	if type(previousConnections) == "table" then
+		for _, connection in ipairs(previousConnections) do
+			if connection and type(connection.Disconnect) == "function" then
+				pcall(function()
+					connection:Disconnect()
+				end)
+			end
+		end
+	end
+
+	local connections = {}
+	env.__VYRS_ESP_OVERLAY_CONNECTIONS = connections
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(connections, connection)
+		return connection
+	end
+
 	local releaseTrack = {
-		latestVersion = "1.5",
-		title = "v1.5 UI + Safety Cleanup",
+		latestVersion = "1.7-dev.0",
+		title = "Interface rebuild",
 		notes = {
-			"Free Cam turned off until further notice.",
-			"Added warning symbols to risky features.",
-			"Shrunk the UI for a cleaner layout.",
-			"Fixed UI alignment and dragging issues.",
+			"New dashboard shell and sidebar navigation.",
+			"Fast boot animation with no per-frame intro effects.",
+			"Cleaner controls, sliders and status surfaces.",
+			"Runtime UI work and player tracking reduced.",
 		},
 	}
+
+	local surface = Color3.fromRGB(18, 21, 28)
+	local surfaceRaised = Color3.fromRGB(23, 27, 36)
+	local control = Color3.fromRGB(31, 36, 47)
 
 	local function getViewportSize()
 		local camera = workspace.CurrentCamera
@@ -26,16 +46,11 @@ return function(context)
 	local function getOverlayConfigKeys(overlayId)
 		if overlayId == "miniHud" then
 			return "miniHudOffsetX", "miniHudOffsetY"
-		end
-
-		if overlayId == "keybindPanel" then
+		elseif overlayId == "keybindPanel" then
 			return "keybindPanelOffsetX", "keybindPanelOffsetY"
-		end
-
-		if overlayId == "targetCard" then
+		elseif overlayId == "targetCard" then
 			return "targetCardOffsetX", "targetCardOffsetY"
 		end
-
 		return nil, nil
 	end
 
@@ -43,16 +58,11 @@ return function(context)
 		local viewport = getViewportSize()
 		if overlayId == "miniHud" then
 			return viewport.X - frame.AbsoluteSize.X - 16, 16
-		end
-
-		if overlayId == "keybindPanel" then
+		elseif overlayId == "keybindPanel" then
 			return 16, 98
-		end
-
-		if overlayId == "targetCard" then
+		elseif overlayId == "targetCard" then
 			return viewport.X - frame.AbsoluteSize.X - 16, 180
 		end
-
 		return 16, 16
 	end
 
@@ -85,7 +95,7 @@ return function(context)
 		local startPosition
 
 		handle.Active = true
-		handle.InputBegan:Connect(function(input)
+		connect(handle.InputBegan, function(input)
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
 				return
 			end
@@ -94,14 +104,14 @@ return function(context)
 			dragStart = input.Position
 			startPosition = frame.AbsolutePosition
 
-			input.Changed:Connect(function()
+			connect(input.Changed, function()
 				if input.UserInputState == Enum.UserInputState.End then
 					dragging = false
 				end
 			end)
 		end)
 
-		context.userInputService.InputChanged:Connect(function(input)
+		connect(context.userInputService.InputChanged, function(input)
 			if not dragging or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then
 				return
 			end
@@ -123,6 +133,7 @@ return function(context)
 		else
 			setOverlayPosition(frame, overlayId, context.config[keyX], context.config[keyY], true)
 		end
+
 		frame.Active = true
 		frame.Draggable = false
 		local handle = dragHandle
@@ -138,8 +149,9 @@ return function(context)
 				Parent = frame,
 			})
 		end
+
 		bindOverlayDrag(frame, overlayId, handle)
-		frame:GetPropertyChangedSignal("Position"):Connect(function()
+		connect(frame:GetPropertyChangedSignal("Position"), function()
 			local position = frame.Position
 			if position.X.Scale ~= 0 or position.Y.Scale ~= 0 then
 				return
@@ -179,106 +191,63 @@ return function(context)
 				return a < b and -1 or 1
 			end
 		end
-
 		return 0
 	end
 
 	local function buildUpdatePanel(parent)
-		local row = context.createRow(parent, 178)
-		row.BackgroundColor3 = context.theme.panelAlt
+		local row = context.createRow(parent, 150)
+		row.BackgroundColor3 = surfaceRaised
 
-		local title = context.makeLabel(row, "UPDATE TRACK", 10, context.theme.accent, Enum.Font.GothamBold)
-		title.Position = UDim2.new(0, 10, 0, 8)
-		title.Size = UDim2.new(0, 112, 0, 12)
+		local kicker = context.makeLabel(row, "BUILD", 8, context.theme.accent, Enum.Font.GothamBold)
+		kicker.Position = UDim2.new(0, 12, 0, 10)
+		kicker.Size = UDim2.new(0, 50, 0, 10)
+
+		local headline = context.makeLabel(row, releaseTrack.title, 14, context.theme.text, Enum.Font.GothamBold)
+		headline.Position = UDim2.new(0, 12, 0, 23)
+		headline.Size = UDim2.new(1, -126, 0, 18)
 
 		local statusBadge = context.create("TextLabel", {
 			AnchorPoint = Vector2.new(1, 0),
 			BackgroundColor3 = context.theme.accentSoft,
 			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0, 8),
-			Size = UDim2.new(0, 92, 0, 18),
+			Position = UDim2.new(1, -12, 0, 12),
+			Size = UDim2.new(0, 94, 0, 24),
 			Font = Enum.Font.GothamBold,
-			Text = "CHECKING",
+			Text = "DEV BUILD",
 			TextColor3 = context.theme.text,
 			TextSize = 8,
 			Parent = row,
 		})
-		context.addCorner(statusBadge, 999)
+		context.addCorner(statusBadge, 7)
+		context.addStroke(statusBadge, context.theme.accent, 0.4, 1)
 
-		local current = context.makeLabel(row, "", 9, context.theme.text, Enum.Font.GothamBold)
-		current.Position = UDim2.new(0, 10, 0, 28)
-		current.Size = UDim2.new(0.48, -8, 0, 12)
+		local versionLine = context.makeLabel(row, "", 9, context.theme.muted, Enum.Font.GothamMedium)
+		versionLine.Position = UDim2.new(0, 12, 0, 45)
+		versionLine.Size = UDim2.new(1, -24, 0, 14)
 
-		local latest = context.makeLabel(row, "", 9, context.theme.muted, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-		latest.Position = UDim2.new(0.52, 0, 0, 28)
-		latest.Size = UDim2.new(0.48, -10, 0, 12)
-
-		local headline = context.makeLabel(row, releaseTrack.title, 10, context.theme.text, Enum.Font.GothamMedium)
-		headline.Position = UDim2.new(0, 10, 0, 46)
-		headline.Size = UDim2.new(1, -120, 0, 14)
-
-		local checkButton = context.create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0),
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(35, 40, 53),
+		local notesHolder = context.create("Frame", {
+			BackgroundColor3 = surface,
 			BorderSizePixel = 0,
-			Position = UDim2.new(1, -10, 0, 44),
-			Size = UDim2.new(0, 92, 0, 20),
-			Font = Enum.Font.GothamBold,
-			Text = "CHECK NOW",
-			TextColor3 = context.theme.text,
-			TextSize = 8,
+			Position = UDim2.new(0, 12, 0, 64),
+			Size = UDim2.new(1, -24, 0, 74),
 			Parent = row,
 		})
-		context.addCorner(checkButton, 999)
-		context.addStroke(checkButton, context.theme.border, 0.35, 1)
-
-		local notesScroller = context.create("ScrollingFrame", {
-			Active = true,
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			BackgroundColor3 = Color3.fromRGB(20, 24, 33),
-			BorderSizePixel = 0,
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			Position = UDim2.new(0, 10, 0, 68),
-			ScrollBarImageColor3 = context.theme.accent,
-			ScrollBarThickness = 4,
-			Size = UDim2.new(1, -20, 1, -78),
-			Parent = row,
-		})
-		context.addCorner(notesScroller, 6)
-		context.addStroke(notesScroller, context.theme.border, 0.35, 1)
-
-		context.create("UIPadding", {
-			PaddingLeft = UDim.new(0, 8),
-			PaddingRight = UDim.new(0, 8),
-			PaddingTop = UDim.new(0, 8),
-			PaddingBottom = UDim.new(0, 8),
-			Parent = notesScroller,
-		})
-
-		context.create("UIListLayout", {
-			Padding = UDim.new(0, 4),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Parent = notesScroller,
-		})
+		context.addCorner(notesHolder, 8)
 
 		local notes = {}
-		for index = 1, #releaseTrack.notes do
-			local note = context.makeLabel(notesScroller, "", 9, context.theme.muted, Enum.Font.GothamMedium)
-			note.AutomaticSize = Enum.AutomaticSize.Y
-			note.Size = UDim2.new(1, 0, 0, 0)
-			note.TextWrapped = true
+		for index, noteText in ipairs(releaseTrack.notes) do
+			local note = context.makeLabel(notesHolder, "• " .. noteText, 8, context.theme.muted, Enum.Font.GothamMedium)
+			note.Position = UDim2.new(0, 10, 0, 5 + ((index - 1) * 16))
+			note.Size = UDim2.new(1, -20, 0, 14)
 			notes[index] = note
 		end
 
 		return {
 			row = row,
 			status = statusBadge,
-			current = current,
-			latest = latest,
+			current = versionLine,
+			latest = versionLine,
 			headline = headline,
-			check = checkButton,
-			scroller = notesScroller,
 			notes = notes,
 		}
 	end
@@ -290,31 +259,14 @@ return function(context)
 
 		local comparison = compareSemanticVersions(context.config.version, releaseTrack.latestVersion)
 		local upToDate = comparison >= 0
-		panel.current.Text = string.format("CURRENT  v%s", context.config.version)
-		panel.latest.Text = string.format("LATEST  v%s", releaseTrack.latestVersion)
+		panel.current.Text = string.format("Current %s  •  development channel", tostring(context.config.version))
 		panel.headline.Text = releaseTrack.title
-		panel.status.Text = upToDate and "UP TO DATE" or "UPDATE READY"
+		panel.status.Text = upToDate and "CURRENT" or "OUTDATED"
 		panel.status.BackgroundColor3 = upToDate and context.theme.accentSoft or Color3.fromRGB(92, 76, 28)
-		panel.status.TextColor3 = context.theme.text
-
-		for index, note in ipairs(panel.notes or {}) do
-			note.Text = releaseTrack.notes[index] and ("- " .. releaseTrack.notes[index]) or ""
-		end
 	end
 
 	local function bindUpdatePanel(panel)
-		if not panel or not panel.check then
-			return
-		end
-
-		panel.check.MouseButton1Click:Connect(function()
-			updateReleasePanel(panel)
-			if compareSemanticVersions(context.config.version, releaseTrack.latestVersion) >= 0 then
-				context.showToast("Update Checker", string.format("You're on v%s", context.config.version), context.theme.accent)
-			else
-				context.showToast("Update Checker", string.format("Latest is v%s", releaseTrack.latestVersion), context.theme.focus)
-			end
-		end)
+		updateReleasePanel(panel)
 	end
 
 	return {
