@@ -1,4 +1,12 @@
-# 0xVyrs Universal ROBLOX ESP Suite
+<p align="center">
+  <img src=".github/g94-brand-mark.svg" alt="G94 logo" width="88" height="88" />
+</p>
+
+<h1 align="center">0xVyrs Universal ROBLOX ESP Suite</h1>
+
+<p align="center"><strong>G94</strong> &nbsp;·&nbsp; Project documentation</p>
+
+---
 
 Proprietary Roblox ESP release maintained by `0xVyrs`.
 
